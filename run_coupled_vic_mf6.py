@@ -29,6 +29,7 @@ class MF6Model:
         self.var_finf = None
         self.var_gwd = None
         self.logger = logger
+        self.start_date = datetime(1940, 3, 1)  # Manual start date from TDIS
 
     def initialize(self):
         """Initialize MF6 model using BMI interface."""
@@ -113,7 +114,7 @@ class MF6Model:
             raise
 
     def _parse_tdis_info(self):
-        """Parse time discretization information (nper, nstp)."""
+        """Parse time discretization information (nper, nstp) using manual start date."""
         try:
             nper_vars = [v for v in self.bmi_vars if v.endswith("/NPER")]
             nstp_vars = [v for v in self.bmi_vars if v.endswith("/NSTP")]
@@ -348,30 +349,30 @@ class CouplingManager:
             if not all(col in self.coupling_table for col in ["vic_id", "mf6_id", "area_ratio", "area_m2", "b_lat", "b_lon"]):
                 raise ValueError("Coupling table missing required columns")
             self.coupling_table["iuzno"] = self.coupling_table["mf6_id"].apply(self._mf6_id_to_iuzno)
-            invalid_ids = self.coupling_table[self.coupling_table["iuzno"] >= self.n_cells]["mf6_id"].unique()
-            if len(invalid_ids) > 0:
-                self.logger.warning(f"{len(invalid_ids)} unique mf6_id values exceed nuzfcells {self.n_cells}: {invalid_ids[:5]}...")
-            valid_mappings = len(self.coupling_table[self.coupling_table["iuzno"] < self.n_cells])
-            self.logger.info(f"Coupling table loaded with {len(self.coupling_table)} mappings ({valid_mappings} valid)")
+            self.logger.info(f"Coupling table loaded with {len(self.coupling_table)} mappings")
             self._initialize_vic_id_mapping()
+            # Verify area_ratio sums to 1 per mf6_id
+            ratio_sum = self.coupling_table.groupby("mf6_id")["area_ratio"].sum()
+            if not np.allclose(ratio_sum, 1.0, atol=1e-6):
+                self.logger.warning(f"Area ratios do not sum to 1 for some mf6_id: {ratio_sum[ratio_sum != 1.0]}")
         except Exception as e:
             self.logger.error(f"Error initializing coupling: {e}")
             raise
 
     def _mf6_id_to_iuzno(self, mf6_id):
-        """Convert mf6_id (RRRCCC) to iuzno index."""
+        """Convert mf6_id (RRRCCC) to iuzno index, ignoring nuzfcells limit."""
         try:
             mf6_id_str = str(mf6_id).zfill(6)  # Ensure 6 digits, e.g., 080055
             row = int(mf6_id_str[:3])  # First 3 digits for row
             col = int(mf6_id_str[3:])  # Last 3 digits for column
             if row < 1 or row > self.mf6.nrow or col < 1 or col > self.mf6.ncol:
                 self.logger.warning(f"Invalid mf6_id {mf6_id}: row={row}, col={col} out of bounds (nrow={self.mf6.nrow}, ncol={self.mf6.ncol})")
-                return self.n_cells
+                return -1  # Flag invalid, but proceed
             iuzno = (row - 1) * self.mf6.ncol + (col - 1)  # 0-based index
             return iuzno
         except (ValueError, TypeError):
             self.logger.warning(f"Invalid mf6_id format: {mf6_id}")
-            return self.n_cells
+            return -1
 
     def _initialize_vic_id_mapping(self):
         """Map vic_id to (lat_idx, lon_idx) using b_lat and b_lon."""
@@ -398,10 +399,9 @@ class CouplingManager:
             raise
 
     def compute_finf(self, baseflow):
-        """Compute infiltration (finf) for MF6 from VIC baseflow for cells with positive flow."""
+        """Compute infiltration (finf) for MF6 from VIC baseflow for all mappings."""
         try:
             finf = np.zeros(self.n_cells)
-            valid_mappings = 0
             # Filter VIC cells with positive baseflow
             positive_vic_ids = []
             for vic_id, (lat_idx, lon_idx) in self.vic_id_to_indices.items():
@@ -411,25 +411,25 @@ class CouplingManager:
                         positive_vic_ids.append(vic_id)
                 except IndexError:
                     self.logger.warning(f"Index error for vic_id {vic_id} at lat_idx={lat_idx}, lon_idx={lon_idx}")
-            # Group by iuzno for MF6 cells linked to positive VIC cells
-            filtered_table = self.coupling_table[self.coupling_table["vic_id"].isin(positive_vic_ids) & (self.coupling_table["iuzno"] < self.n_cells)]
+            # Group by iuzno for all mappings, ignoring nuzfcells limit
+            filtered_table = self.coupling_table[self.coupling_table["vic_id"].isin(positive_vic_ids)]
             grouped = filtered_table.groupby("iuzno")
             for iuzno, group in grouped:
-                total_finf = 0.0
-                for _, row in group.iterrows():
-                    vic_id = int(row["vic_id"])
-                    area_ratio = row["area_ratio"]
-                    area_m2 = row["area_m2"]
-                    if vic_id in self.vic_id_to_indices:
-                        lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
-                        try:
-                            bf = baseflow[-1, lat_idx, lon_idx]
-                            total_finf += bf * area_ratio * area_m2 / 1e6 * self.mm_to_ft
-                            valid_mappings += 1
-                        except IndexError:
-                            self.logger.warning(f"Index error for vic_id {vic_id} at lat_idx={lat_idx}, lon_idx={lon_idx}")
-                finf[iuzno] = total_finf
-            self.logger.info(f"Computed finf for {valid_mappings} valid mappings")
+                if iuzno >= 0 and iuzno < self.n_cells:  # Only apply to valid indices
+                    total_finf = 0.0
+                    for _, row in group.iterrows():
+                        vic_id = int(row["vic_id"])
+                        area_ratio = row["area_ratio"]
+                        area_m2 = row["area_m2"]
+                        if vic_id in self.vic_id_to_indices:
+                            lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
+                            try:
+                                bf = baseflow[-1, lat_idx, lon_idx]
+                                total_finf += bf * area_ratio * area_m2 / 1e6 * self.mm_to_ft
+                            except IndexError:
+                                self.logger.warning(f"Index error for vic_id {vic_id} at lat_idx={lat_idx}, lon_idx={lon_idx}")
+                    finf[iuzno] = total_finf
+            self.logger.info(f"Computed finf for all valid mappings")
             self.logger.info(f"finf mean: {finf.mean():.6f} ft/day")
             self.logger.info(f"finf sample[:5]={finf[:5]}")
             return finf
@@ -438,7 +438,7 @@ class CouplingManager:
             return np.zeros(self.n_cells)
 
     def update_vic_params(self, uzf_gwd, baseflow):
-        """Update VIC parameters (init_moist) using MF6 groundwater discharge."""
+        """Update VIC parameters (init_moist) using MF6 groundwater discharge for all mappings."""
         try:
             self.logger.info(f"Reading {self.params_file}")
             ds = Dataset(self.params_file, "r")
@@ -453,26 +453,24 @@ class CouplingManager:
             try:
                 ds = Dataset(self.params_file, "r+", format="NETCDF4")
                 init_moist = ds.variables["init_moist"]
-                valid_mappings = 0
-                for _, row in self.coupling_table[self.coupling_table["iuzno"] < self.n_cells].iterrows():
+                for _, row in self.coupling_table.iterrows():
                     vic_id = int(row["vic_id"])
                     iuzno = int(row["iuzno"])
                     area_ratio = row["area_ratio"]
                     area_m2 = row["area_m2"]
-                    if vic_id in self.vic_id_to_indices:
+                    if iuzno >= 0 and iuzno < self.n_cells and vic_id in self.vic_id_to_indices:
                         lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
                         try:
                             gwd_mm = uzf_gwd[iuzno] * self.ft_to_mm * area_ratio * area_m2 / 1e6
                             bf_mm = baseflow[-1, lat_idx, lon_idx] if baseflow is not None else 0.0
-                            new_moist = gwd_mm + bf_mm if gwd_mm > 0 else 0.0  # Drained if gwd <= 0
+                            new_moist = gwd_mm + bf_mm if gwd_mm > 0 else 0.0
                             init_moist[2, lat_idx, lon_idx] = min(max(new_moist, 0.1), 100.0)
-                            valid_mappings += 1
                         except IndexError:
                             self.logger.warning(f"Index error for vic_id {vic_id} at lat_idx={lat_idx}, lon_idx={lon_idx} or iuzno {iuzno}")
                     else:
-                        self.logger.warning(f"vic_id {vic_id} not in mapping")
+                        self.logger.warning(f"Skipping invalid mapping: vic_id {vic_id}, iuzno {iuzno}")
                 ds.close()
-                self.logger.info(f"VIC params updated with {valid_mappings} valid mappings")
+                self.logger.info("VIC params updated for all valid mappings")
                 return True
             except Exception as e:
                 self.logger.error(f"Error updating VIC params with NETCDF4: {e}")
@@ -482,26 +480,24 @@ class CouplingManager:
                 try:
                     ds = Dataset(self.params_file, "r+", format="NETCDF3_64BIT")
                     init_moist = ds.variables["init_moist"]
-                    valid_mappings = 0
-                    for _, row in self.coupling_table[self.coupling_table["iuzno"] < self.n_cells].iterrows():
+                    for _, row in self.coupling_table.iterrows():
                         vic_id = int(row["vic_id"])
                         iuzno = int(row["iuzno"])
                         area_ratio = row["area_ratio"]
                         area_m2 = row["area_m2"]
-                        if vic_id in self.vic_id_to_indices:
+                        if iuzno >= 0 and iuzno < self.n_cells and vic_id in self.vic_id_to_indices:
                             lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
                             try:
                                 gwd_mm = uzf_gwd[iuzno] * self.ft_to_mm * area_ratio * area_m2 / 1e6
                                 bf_mm = baseflow[-1, lat_idx, lon_idx] if baseflow is not None else 0.0
                                 new_moist = gwd_mm + bf_mm if gwd_mm > 0 else 0.0
                                 init_moist[2, lat_idx, lon_idx] = min(max(new_moist, 0.1), 100.0)
-                                valid_mappings += 1
                             except IndexError:
                                 self.logger.warning(f"Index error for vic_id {vic_id} at lat_idx={lat_idx}, lon_idx={lon_idx} or iuzno {iuzno}")
                         else:
-                            self.logger.warning(f"vic_id {vic_id} not in mapping")
+                            self.logger.warning(f"Skipping invalid mapping: vic_id {vic_id}, iuzno {iuzno}")
                     ds.close()
-                    self.logger.info(f"VIC params updated with NETCDF3_64BIT, {valid_mappings} valid mappings")
+                    self.logger.info("VIC params updated with NETCDF3_64BIT for all valid mappings")
                     return True
                 except Exception as e2:
                     self.logger.error(f"Error updating with NETCDF3_64BIT: {e2}")
@@ -518,42 +514,42 @@ class CouplingManager:
         """Log coupling results to CSV."""
         try:
             with open(self.log_file, "a") as f:
-                for _, row in self.coupling_table[self.coupling_table["iuzno"] < self.n_cells].iterrows():
+                for _, row in self.coupling_table.iterrows():
                     iuzno = int(row["iuzno"])
                     vic_id = int(row["vic_id"])
-                    try:
-                        if init_moist is not None and vic_id in self.vic_id_to_indices:
+                    if iuzno >= 0 and iuzno < self.n_cells and vic_id in self.vic_id_to_indices:
+                        try:
                             lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
-                            moist_val = init_moist[lat_idx, lon_idx]
-                        else:
-                            moist_val = 0.0
-                        f.write(f"{stress_period},{row['mf6_id']},{vic_id},{finf[iuzno]:.6f},{uzf_gwd[iuzno]:.6f},{moist_val:.6f}\n")
-                    except (IndexError, TypeError):
-                        self.logger.warning(f"Index error logging for iuzno {iuzno}, vic_id {vic_id}")
+                            moist_val = init_moist[lat_idx, lon_idx] if init_moist is not None else 0.0
+                            f.write(f"{stress_period},{row['mf6_id']},{vic_id},{finf[iuzno]:.6f},{uzf_gwd[iuzno]:.6f},{moist_val:.6f}\n")
+                        except (IndexError, TypeError):
+                            self.logger.warning(f"Index error logging for iuzno {iuzno}, vic_id {vic_id}")
+                    else:
+                        self.logger.warning(f"Skipping invalid mapping in log: mf6_id {row['mf6_id']}, vic_id {vic_id}")
             self.logger.info(f"Logged to {self.log_file}")
         except Exception as e:
             self.logger.error(f"Error logging: {e}")
 
-    def run(self, mf6_start_date, vic_start_date, coupling_end_date):
-        """Run coupled VIC-MF6 simulation with MF6 initiating and alternating with VIC."""
+    def run(self, vic_start_date, coupling_end_date):
+        """Run coupled VIC-MF6 simulation with MF6 initiating from manual start to just before VIC."""
         self.logger.info("Starting full coupling with MF6 initiation")
         first = True
         prev_date = None
-        mf6_current_date = mf6_start_date
-        vic_current_date = vic_start_date
+        mf6_current_date = self.mf6.start_date  # Manual start date from TDIS
 
-        # Step 1: Run MF6 for the first timestep (Dec 1980)
-        self.logger.info(f"Running MF6 for first timestep from {mf6_current_date} to 1980-12-31")
+        # Step 1: Run MF6 from its manual start date to just before VIC start date
+        vic_start_minus_one_day = vic_start_date - timedelta(days=1)
+        self.logger.info(f"Running MF6 from {mf6_current_date} to {vic_start_minus_one_day}")
         try:
-            mf6_end_date = datetime(1980, 12, 31)
-            self.mf6.run_to_date(mf6_end_date, mf6_current_date)
-            mf6_current_date = mf6_end_date
+            self.mf6.run_to_date(vic_start_minus_one_day, mf6_current_date)
+            mf6_current_date = vic_start_minus_one_day
         except Exception as e:
-            self.logger.error(f"Failed to run MF6 first timestep: {e}")
+            self.logger.error(f"Failed to run MF6 pre-VIC period: {e}")
             return
 
         # Main coupling loop: MF6 -> VIC -> MF6
-        while vic_current_date < coupling_end_date:
+        vic_current_date = vic_start_date
+        while vic_current_date <= coupling_end_date:
             mf6_period_end = vic_current_date  # Align MF6 with VIC's current period
             vic_period_end = (vic_current_date + timedelta(days=calendar.monthrange(vic_current_date.year, vic_current_date.month)[1] - 1))
 
@@ -615,7 +611,7 @@ class CouplingManager:
 
 def main():
     # Configuration
-    workspace = "../../MF6/rgtihm/model"
+    workspace = "../../MF6/rgtihm/model_2100"
     mf6_dll = "~/usr/local/src/modflow6/bin/libmf6.so"
     vic_dir = "./nm_image/"
     vic_exe = "/home/abdazzam/usr/local/src/VIC/vic/drivers/image/vic_image.exe"
@@ -627,9 +623,8 @@ def main():
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(exchange_dir, f"coupling_log_{current_time}.csv")
     debug_log_file = os.path.join(exchange_dir, f"coupling_debug_{current_time}.log")
-    mf6_start_date = datetime(1980, 12, 1)  # MF6 starts in Dec 1980
     vic_start_date = datetime(1990, 1, 1)   # VIC starts in Jan 1990
-    coupling_end_date = datetime(2014, 12, 31)
+    coupling_end_date = datetime(2091, 12, 31)
 
     # Create directories
     try:
@@ -700,7 +695,7 @@ def main():
 
     # Run coupling
     try:
-        cpl.run(mf6_start_date, vic_start_date, coupling_end_date)
+        cpl.run(vic_start_date, coupling_end_date)
     except Exception as e:
         logger.error(f"Error during coupling: {e}")
     finally:
