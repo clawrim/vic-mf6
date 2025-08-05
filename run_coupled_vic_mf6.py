@@ -142,7 +142,6 @@ class MF6Model:
         except Exception as e:
             self.logger.error(f"Error identifying UZF variables: {e}")
             raise
-
     
     def run_to_date(self, end_date, start_date):
         """Run MF6 from start_date to end_date."""
@@ -169,33 +168,6 @@ class MF6Model:
         except Exception as e:
             self.logger.error(f"Error running MF6 to date: {e}")
             raise
-
-
-#    def run_to_date(self, end_date, start_date):
-#        """Run MF6 from start_date to end_date."""
-#        try:
-#            # calculate stress periods relative to 3/1/1940
-#            start_time = (start_date - datetime(1940, 3, 1)).total_seconds() / 86400.0
-#            end_time = (end_date - datetime(1940, 3, 1)).total_seconds() / 86400.0
-#            # the current stress period relative to 3/1/1940
-#            current_time = self.mf6.get_current_time()
-#
-#            if current_time < start_time:
-#                self.logger.warning(f"Current time {current_time} before start time {start_time}; adjusting")
-#                # TODO 1: I don't think this block does anything because it won't
-#                # affect the mf6 model and current_time is retrieved again from
-#                # the mf6 model within the while loop below
-#                current_time = start_time
-#
-#            while current_time < end_time:
-#                self.mf6.prepare_time_step(0.0)
-#                self.mf6.do_time_step()
-#                self.mf6.finalize_time_step()
-#                current_time = self.mf6.get_current_time()
-#            self.logger.info(f"MF6 ran to {end_date}")
-#        except Exception as e:
-#            self.logger.error(f"Error running MF6 to date: {e}")
-#            raise
 
     def run_timestep(self):
         """Run a single MF6 timestep."""
@@ -662,14 +634,15 @@ class CouplingManager:
             self.logger.error(f"Failed to run MF6 pre-VIC period: {e}")
             return
 
-        # Main coupling loop: VIC and MF6 run for same period
+        # main coupling loop: VIC and MF6 run for same period
         vic_current_date = vic_start_date
         while vic_current_date <= coupling_end_date:
-            # Calculate period end (monthly, using calendar.monthrange)
+
+            # calculate period end (monthly, using calendar.monthrange)
             mf6_period_end = vic_current_date  # Align MF6 with VIC's current period start
             vic_period_end = (vic_current_date + timedelta(days=calendar.monthrange(vic_current_date.year, vic_current_date.month)[1] - 1))
 
-            # Step 2: Run VIC for one stress period
+            # step 2: run VIC for one stress period
             self.logger.info(f"Running VIC for SP from {vic_current_date} to {vic_period_end}")
             state_date_tag = vic_period_end.strftime("%Y%m%d")
             wbal_date_tag = vic_current_date.strftime("%Y-%m-%d")
@@ -679,7 +652,7 @@ class CouplingManager:
                 return
             self.vic.move_files(state_date_tag, wbal_date_tag)
 
-            # Step 3: Run MF6 for the same stress period
+            # step 3: run mf6 for the same stress period
             self.logger.info(f"Running MF6 for SP from {mf6_current_date} to {vic_period_end}")
             try:
                 self.mf6.run_to_date(vic_period_end, mf6_current_date)
@@ -688,14 +661,14 @@ class CouplingManager:
                 self.logger.error(f"Failed to run MF6 for SP starting {mf6_current_date}: {e}")
                 return
 
-            # Step 4: Read VIC baseflow
+            # step 4: read VIC baseflow
             self.logger.info(f"Reading VIC baseflow for SP starting {vic_current_date}")
             baseflow = self.vic.read_vic_wb(wbal_date_tag)
             if baseflow is None:
                 self.logger.warning(f"No baseflow found for SP starting {vic_current_date}, using zeros")
                 baseflow = np.zeros((1, *self.vic_grid_shape))
 
-            # Step 5: Extract MF6 GWD
+            # step 5: extract mf6 GWD
             self.logger.info(f"Extracting MF6 uzf_gwd for SP starting {vic_current_date}")
             try:
                 uzf_gwd = self.mf6.mf6.get_value_ptr(self.mf6.var_gwd)
@@ -704,7 +677,7 @@ class CouplingManager:
                 self.logger.error(f"Failed to extract uzf_gwd for SP starting {vic_current_date}: {e}")
                 return
 
-            # Step 6: Apply baseflow to finf based on GWD condition
+            # step 6: apply baseflow to finf based on GWD condition
             self.logger.info(f"Applying baseflow to MF6 finf based on GWD condition for SP starting {vic_current_date}")
             finf = np.zeros(self.n_cells)
             for idx, row in self.coupling_table.iterrows():
@@ -719,10 +692,10 @@ class CouplingManager:
                         gwd = uzf_gwd[iuzno]
                         mm_to_ft = 0.00328084
                         if gwd > 0:
-                            # GWD > 0: Combine baseflow and GWD (current behavior)
+                            # GWD > 0: combine baseflow and gwd 
                             finf[iuzno] += (bf + gwd * self.ft_to_mm) * row["mf6_area_ratio"] * mm_to_ft
                         else:
-                            # GWD = 0: Apply baseflow only
+                            # GWD = 0: apply baseflow only
                             if bf > 0:
                                 finf[iuzno] += bf * row["mf6_area_ratio"] * mm_to_ft
                     except IndexError:
@@ -741,7 +714,7 @@ class CouplingManager:
                 self.logger.error(f"Failed to set finf for SP starting {vic_current_date}: {e}")
                 return
 
-            # Step 7: Update VIC parameters with GWD
+            # step 7: update VIC parameters with GWD
             self.logger.info(f"Updating VIC params with MF6 uzf_gwd for SP starting {vic_current_date}")
             try:
                 if not self.update_vic_params(uzf_gwd, baseflow):
@@ -750,7 +723,7 @@ class CouplingManager:
                 self.logger.error(f"Failed to update VIC params for SP starting {vic_current_date}: {e}")
                 return
 
-            # Step 8: Log results
+            # step 8: log results
             stress_period = (vic_current_date.year - vic_start_date.year) * 12 + (vic_current_date.month - vic_start_date.month)
             self.log_results(stress_period, finf, uzf_gwd, baseflow[-1] if baseflow is not None else np.zeros(self.vic_grid_shape))
 
@@ -760,93 +733,6 @@ class CouplingManager:
             prev_date = state_date_tag
 
         self.logger.info("Full coupling complete")
-    
-#    def run(self, vic_start_date, coupling_end_date):
-#        """Run coupled VIC-MF6 simulation with MF6 initiating from manual start to just before VIC."""
-#        self.logger.info("Starting full coupling with MF6 initiation")
-#        first = True
-#        prev_date = None
-#        mf6_current_date = self.mf6.start_date  # Manual start date from TDIS
-#
-#        # Step 1: Run MF6 from its manual start date to just before VIC start date
-#        vic_start_minus_one_day = vic_start_date - timedelta(days=1)
-#        self.logger.info(f"Running MF6 from {mf6_current_date} to {vic_start_minus_one_day}")
-#        try:
-#            self.mf6.run_to_date(vic_start_minus_one_day, mf6_current_date)
-#            mf6_current_date = vic_start_minus_one_day
-#        except Exception as e:
-#            self.logger.error(f"Failed to run MF6 pre-VIC period: {e}")
-#            return
-#
-#        # Main coupling loop: MF6 -> VIC -> MF6
-#        vic_current_date = vic_start_date
-#        while vic_current_date <= coupling_end_date:
-#            mf6_period_end = vic_current_date  # Align MF6 with VIC's current period
-#            vic_period_end = (vic_current_date + timedelta(days=calendar.monthrange(vic_current_date.year, vic_current_date.month)[1] - 1)) ## TODO 5: Explain this
-#
-#            # Step 2: Run VIC for one stress period and stop
-#            self.logger.info(f"Running VIC for SP from {vic_current_date} to {vic_period_end}")
-#            state_date_tag = vic_period_end.strftime("%Y%m%d")
-#            wbal_date_tag = vic_current_date.strftime("%Y-%m-%d")
-#            sp_param = self.vic.update_global_param(wbal_date_tag, vic_current_date, vic_period_end, prev_date, first)
-#            if not self.vic.run(sp_param):
-#                self.logger.error(f"VIC run failed for SP starting {vic_current_date}")
-#                return
-#            self.vic.move_files(state_date_tag, wbal_date_tag)
-#
-#            # Step 3: Apply VIC baseflow to MF6 finf
-#            self.logger.info(f"Exchanging data: Applying VIC baseflow to MF6 finf for SP starting {vic_current_date}")
-#            baseflow = self.vic.read_vic_wb(wbal_date_tag)
-#            if baseflow is None:
-#                self.logger.warning(f"No baseflow found for SP starting {vic_current_date}, using zeros")
-#                baseflow = np.zeros((1, *self.vic_grid_shape))
-#            finf = self.compute_finf(baseflow)
-#            try:
-#                self.mf6.mf6.update()  # Ensure model state is ready
-#                self.mf6.mf6.set_value(self.mf6.var_finf, finf)
-#                # Verify application
-#                mf6_finf = self.mf6.mf6.get_value(self.mf6.var_finf)
-#                output_dir = self.vic.exchange_dir
-#                np.savetxt(os.path.join(output_dir, "mf6_finf.txt"), mf6_finf)
-#                self.logger.info(f"Applied FINF: non-zero count = {(mf6_finf > 0).sum()}, mean = {mf6_finf.mean():.6f} ft/day")
-#                # Save non-zero iuzno indices
-#                non_zero_iuzno = np.where(mf6_finf > 0)[0]
-#                np.savetxt(os.path.join(output_dir, "non_zero_iuzno.txt"), non_zero_iuzno, fmt="%d")
-#                self.logger.info(f"Non-zero iuzno count: {len(non_zero_iuzno)}")
-#            except Exception as e:
-#                self.logger.error(f"Failed to set finf for SP starting {vic_current_date}: {e}")
-#                return
-#
-#            # Step 4: Run MF6 for the same period and stop
-#            self.logger.info(f"Running MF6 for SP from {mf6_current_date} to {mf6_period_end}")
-#            try:
-#                self.mf6.run_to_date(mf6_period_end, mf6_current_date)
-#                mf6_current_date = mf6_period_end
-#            except Exception as e:
-#                self.logger.error(f"Failed to run MF6 for SP starting {mf6_current_date}: {e}")
-#                return
-#
-#            # Step 5: Update VIC parameters (optional, based on MF6 output)
-#            self.logger.info(f"Updating VIC params with MF6 uzf_gwd for SP starting {vic_current_date}")
-#            try:
-#                uzf_gwd = self.mf6.mf6.get_value_ptr(self.mf6.var_gwd)
-#                self.logger.info(f"uzf_gwd mean: {uzf_gwd.mean():.6f} ft/day")
-#                if not self.update_vic_params(uzf_gwd, baseflow):
-#                    self.logger.warning(f"Failed to update VIC params for SP starting {vic_current_date}")
-#            except Exception as e:
-#                self.logger.error(f"Failed to extract uzf_gwd or update VIC for SP starting {vic_current_date}: {e}")
-#                return
-#
-#            # Step 6: Log results
-#            stress_period = (vic_current_date.year - vic_start_date.year) * 12 + (vic_current_date.month - vic_start_date.month)
-#            self.log_results(stress_period, finf, uzf_gwd, baseflow[-1] if baseflow is not None else np.zeros(self.vic_grid_shape))
-#
-#            self.logger.info(f"Completed SP {stress_period}")
-#            vic_current_date = (vic_period_end + timedelta(days=1)).replace(day=1)
-#            first = False
-#            prev_date = state_date_tag
-#
-#        self.logger.info("Full coupling complete")
 
 def main():
     
