@@ -6,4 +6,4 @@ This figure shows the flowchart of the VIC-MF6 coupling framework:
 <img width="512" alt="Flowchart of the VIC-MF6 coupling framework" src="https://github.com/clawrim/VIC-MF6/blob/main/figures/vic-mf6-flowchart.png" />
 
 This figure shows how to optimize the coupled distributed model:
-<img width="512" alt="Distributed optimization of the VIC-MF6 coupling framework" src="https://github.com/clawrim/VIC-MF6/blob/main/figures/vic-mf6-optimization.gif" />
+<img alt="Distributed optimization of the VIC-MF6 coupling framework" src="https://github.com/clawrim/VIC-MF6/blob/main/figures/vic-mf6-optimization.gif" />
