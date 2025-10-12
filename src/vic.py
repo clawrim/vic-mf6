@@ -18,7 +18,6 @@ This module provides VIC image driver helpers to manage per-month runs and read
 water-balance/state outputs.
 """
 
-
 from __future__ import annotations
 
 import os
@@ -162,7 +161,11 @@ class VICModel:
 
     def move_files(self, state_date_tag: str, wbal_date_tag: str) -> None:
         """Report the presence of VIC state (end-of-month) and wbal (first-of-month) files under outputs."""
-        state_fn = f"{self.state_file_prefix}.{state_date_tag}_00000.nc" if self.state_file_prefix else None
+        state_fn = (
+            f"{self.state_file_prefix}.{state_date_tag}_00000.nc"
+            if self.state_file_prefix
+            else None
+        )
         if state_fn:
             state_path = os.path.join(self.outputs_dir, state_fn)
             if os.path.exists(state_path):
@@ -170,7 +173,9 @@ class VICModel:
             else:
                 self.logger.error(f"Missing state: {state_path}")
 
-        wbal_fn = f"{self.wb_file_prefix}.{wbal_date_tag}.nc" if self.wb_file_prefix else None
+        wbal_fn = (
+            f"{self.wb_file_prefix}.{wbal_date_tag}.nc" if self.wb_file_prefix else None
+        )
         if wbal_fn:
             wbal_path = os.path.join(self.outputs_dir, wbal_fn)
             if os.path.exists(wbal_path):
@@ -180,7 +185,9 @@ class VICModel:
 
     def read_vic_wb(self, wbal_date_tag: str):
         """Read OUT_BASEFLOW (mm) from wbal.<YYYY-MM-DD>.nc under outputs."""
-        wbal_fn = f"{self.wb_file_prefix}.{wbal_date_tag}.nc" if self.wb_file_prefix else None
+        wbal_fn = (
+            f"{self.wb_file_prefix}.{wbal_date_tag}.nc" if self.wb_file_prefix else None
+        )
         if not wbal_fn:
             self.logger.error("wbal prefix not set")
             return None

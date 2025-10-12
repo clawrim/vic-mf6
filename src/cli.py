@@ -29,8 +29,8 @@ from pathlib import Path
 
 
 # allow both:
-#   python -m ems.cli -c config.yaml         
-#   (when src is on PYTHONPATH or package is installed) 
+#   python -m ems.cli -c config.yaml
+#   (when src is on PYTHONPATH or package is installed)
 
 #   python src/ems/cli.py -c config.yaml
 #   (directscript run from repo root)
@@ -96,7 +96,9 @@ def main(argv: list[str] | None = None) -> int:
             workspace=mf6_cfg["workspace"],
             mf6_dll=mf6_cfg["dll"],
             logger=log,
-            start_date=datetime.fromisoformat(str(mf6_cfg.get("start_date", "1940-03-01"))),
+            start_date=datetime.fromisoformat(
+                str(mf6_cfg.get("start_date", "1940-03-01"))
+            ),
         )
         mf6.initialize()
     except Exception as e:

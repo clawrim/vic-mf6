@@ -64,9 +64,15 @@ class CouplingManager:
 
         pattern = os.path.join(self.mf6.workspace, f"{model_name}*.uzf")
         matches = glob.glob(pattern)
-        self.uzf_file = matches[0] if matches else os.path.join(self.mf6.workspace, f"{model_name}.uzf")
+        self.uzf_file = (
+            matches[0]
+            if matches
+            else os.path.join(self.mf6.workspace, f"{model_name}.uzf")
+        )
 
-        self.skipped_ids_file = os.path.join(self.vic.exchange_dir, "skipped_mf6_ids.txt")
+        self.skipped_ids_file = os.path.join(
+            self.vic.exchange_dir, "skipped_mf6_ids.txt"
+        )
         self.uzf_mapping = self._load_uzf_mapping()
 
     def _load_uzf_mapping(self) -> dict[str, int]:
@@ -77,11 +83,17 @@ class CouplingManager:
                 return {}
             with open(self.uzf_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-            start_idx = next(i for i, ln in enumerate(lines) if "BEGIN packagedata" in ln) + 1
+            start_idx = (
+                next(i for i, ln in enumerate(lines) if "BEGIN packagedata" in ln) + 1
+            )
             end_idx = next(i for i, ln in enumerate(lines) if "END packagedata" in ln)
             uzf_data = [ln.split()[:4] for ln in lines[start_idx:end_idx]]
-            uzf_df = pd.DataFrame(uzf_data, columns=["iuzno", "nlay", "nrow", "ncol"]).astype(int)
-            uzf_df["mf6_id"] = uzf_df.apply(lambda x: f"{x['nrow']:03d}{x['ncol']:03d}", axis=1)
+            uzf_df = pd.DataFrame(
+                uzf_data, columns=["iuzno", "nlay", "nrow", "ncol"]
+            ).astype(int)
+            uzf_df["mf6_id"] = uzf_df.apply(
+                lambda x: f"{x['nrow']:03d}{x['ncol']:03d}", axis=1
+            )
             self.logger.info(f"loaded {len(uzf_df)} uzf rows")
             return dict(zip(uzf_df["mf6_id"], uzf_df["iuzno"]))
         except Exception as e:
@@ -109,18 +121,28 @@ class CouplingManager:
         try:
             os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
             with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write("stress_period,mf6_id,vic_id,finf_ft_per_day,uzf_gwd_ft_per_day,init_moist_mm\n")
+                f.write(
+                    "stress_period,mf6_id,vic_id,finf_ft_per_day,uzf_gwd_ft_per_day,init_moist_mm\n"
+                )
 
-            self.coupling_table["iuzno"] = self.coupling_table["mf6_id"].apply(self._mf6_id_to_iuzno)
-            valid = (self.coupling_table["iuzno"] >= 0) & (self.coupling_table["iuzno"] < self.n_cells)
+            self.coupling_table["iuzno"] = self.coupling_table["mf6_id"].apply(
+                self._mf6_id_to_iuzno
+            )
+            valid = (self.coupling_table["iuzno"] >= 0) & (
+                self.coupling_table["iuzno"] < self.n_cells
+            )
             self.coupling_table = self.coupling_table.loc[valid].copy()
             if self.coupling_table.empty:
-                raise ValueError("no valid iuzno mappings; check join csv and uzf package")
+                raise ValueError(
+                    "no valid iuzno mappings; check join csv and uzf package"
+                )
 
             ratio_sum = self.coupling_table.groupby("mf6_id")["mf6_area_ratio"].sum()
             bad = ratio_sum[~np.isclose(ratio_sum, 1.0, atol=1e-6)]
             if not bad.empty:
-                self.logger.warning(f"area ratios not summing to 1 for {len(bad)} mf6_id samples: {bad.head().to_dict()}")
+                self.logger.warning(
+                    f"area ratios not summing to 1 for {len(bad)} mf6_id samples: {bad.head().to_dict()}"
+                )
 
             self._initialize_vic_id_mapping()
         except Exception as e:
@@ -149,7 +171,9 @@ class CouplingManager:
             else:
                 self.vic_lon = lon
 
-            self.logger.info(f"vic grid: lat={self.vic_lat.shape}, lon={self.vic_lon.shape}")
+            self.logger.info(
+                f"vic grid: lat={self.vic_lat.shape}, lon={self.vic_lon.shape}"
+            )
 
             for _, row in self.coupling_table.iterrows():
                 vic_id = int(row["vic_id"])
@@ -157,9 +181,13 @@ class CouplingManager:
                 b_lon = float(row["b_lon"])
                 lat_idx = np.abs(self.vic_lat - b_lat).argmin()
                 lon_idx = np.abs(self.vic_lon - b_lon).argmin()
-                if not (np.isclose(self.vic_lat[lat_idx], b_lat, atol=1e-5)
-                        and np.isclose(self.vic_lon[lon_idx], b_lon, atol=1e-5)):
-                    self.logger.warning(f"vic_id {vic_id} not close to grid (b_lat={b_lat}, b_lon={b_lon})")
+                if not (
+                    np.isclose(self.vic_lat[lat_idx], b_lat, atol=1e-5)
+                    and np.isclose(self.vic_lon[lon_idx], b_lon, atol=1e-5)
+                ):
+                    self.logger.warning(
+                        f"vic_id {vic_id} not close to grid (b_lat={b_lat}, b_lon={b_lon})"
+                    )
                 else:
                     self.vic_id_to_indices[vic_id] = (int(lat_idx), int(lon_idx))
 
@@ -205,15 +233,21 @@ class CouplingManager:
                 finf[iuzno] += bf_mm * self.mm_to_ft * ratio
 
             np.savetxt(os.path.join(self.vic.exchange_dir, "computed_finf.txt"), finf)
-            self.logger.info(f"finf>0 count={int((finf > 0).sum())}, mean={float(finf.mean()):.6f} ft/day")
+            self.logger.info(
+                f"finf>0 count={int((finf > 0).sum())}, mean={float(finf.mean()):.6f} ft/day"
+            )
             if skipped:
-                self.logger.info(f"skipped {len(skipped)} mf6 ids (mapping/baseflow issues)")
+                self.logger.info(
+                    f"skipped {len(skipped)} mf6 ids (mapping/baseflow issues)"
+                )
             return finf
         except Exception as e:
             self.logger.error(f"compute_finf failed: {e}")
             return np.zeros(self.n_cells, dtype=float)
 
-    def update_vic_params(self, uzf_gwd: np.ndarray, baseflow: Optional[np.ndarray]) -> bool:
+    def update_vic_params(
+        self, uzf_gwd: np.ndarray, baseflow: Optional[np.ndarray]
+    ) -> bool:
         """Update VIC init_moist at layer index 2 using MF6 UZF GWD (ft/day) converted to mm and baseflow mm."""
         try:
             self.logger.info(f"reading {self.params_file}")
@@ -265,7 +299,9 @@ class CouplingManager:
                             bf_mm = float(baseflow[-1, lat_idx, lon_idx])
                         except Exception:
                             bf_mm = 0.0
-                    new_moist = max(min(bf_mm + (gwd_mm if gwd_mm > 0 else 0.0), 100.0), 0.1)
+                    new_moist = max(
+                        min(bf_mm + (gwd_mm if gwd_mm > 0 else 0.0), 100.0), 0.1
+                    )
                     init_moist[2, lat_idx, lon_idx] = new_moist
                 ds.close()
                 self.logger.info("vic params updated with NETCDF3_64BIT")
@@ -299,8 +335,12 @@ class CouplingManager:
                         else np.nan
                     )
                     finf_val = float(finf[iuzno]) if 0 <= iuzno < len(finf) else np.nan
-                    gwd_val = float(uzf_gwd[iuzno]) if 0 <= iuzno < len(uzf_gwd) else np.nan
-                    f.write(f"{stress_period},{mf6_id},{vic_id},{finf_val},{gwd_val},{im}\n")
+                    gwd_val = (
+                        float(uzf_gwd[iuzno]) if 0 <= iuzno < len(uzf_gwd) else np.nan
+                    )
+                    f.write(
+                        f"{stress_period},{mf6_id},{vic_id},{finf_val},{gwd_val},{im}\n"
+                    )
         except Exception as e:
             self.logger.error(f"log write failed: {e}")
 
@@ -312,7 +352,9 @@ class CouplingManager:
         mf6_current_date = self.mf6.start_date
 
         vic_start_minus_one = vic_start_date - timedelta(days=1)
-        self.logger.info(f"mf6 pre-run: from {mf6_current_date} to {vic_start_minus_one} (coupling start date)")
+        self.logger.info(
+            f"mf6 pre-run: from {mf6_current_date} to {vic_start_minus_one} (coupling start date)"
+        )
         try:
             self.mf6.run_to_date(vic_start_minus_one, mf6_current_date)  # type: ignore[attr-defined]
             mf6_current_date = vic_start_minus_one
@@ -365,7 +407,11 @@ class CouplingManager:
                 self.mf6.set_finf_for_uzf_cells(finf)
                 np.savetxt(os.path.join(self.vic.exchange_dir, "mf6_finf.txt"), finf)
                 non_zero_iuzno = np.where(finf > 0)[0]
-                np.savetxt(os.path.join(self.vic.exchange_dir, "non_zero_iuzno.txt"), non_zero_iuzno, fmt="%d")
+                np.savetxt(
+                    os.path.join(self.vic.exchange_dir, "non_zero_iuzno.txt"),
+                    non_zero_iuzno,
+                    fmt="%d",
+                )
             except Exception as e:
                 self.logger.error(f"set finf failed: {e}")
                 return

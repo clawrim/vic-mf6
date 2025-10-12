@@ -30,7 +30,13 @@ import xmipy
 
 
 class MF6Model:
-    def __init__(self, workspace: str, mf6_dll: str, logger, start_date: Optional[datetime] = None) -> None:
+    def __init__(
+        self,
+        workspace: str,
+        mf6_dll: str,
+        logger,
+        start_date: Optional[datetime] = None,
+    ) -> None:
         """Holds MF6 paths, logger, and basic BMI state."""
         self.workspace = os.path.expanduser(workspace)
         self.mf6_dll = os.path.expanduser(mf6_dll)
@@ -91,7 +97,9 @@ class MF6Model:
     def _parse_name_file(self) -> None:
         """Read the model name from the .nam file; fall back to filename stem."""
         try:
-            nam = next(f for f in os.listdir(self.workspace) if f.lower().endswith(".nam"))
+            nam = next(
+                f for f in os.listdir(self.workspace) if f.lower().endswith(".nam")
+            )
             with open(os.path.join(self.workspace, nam), "r", encoding="utf-8") as fh:
                 for line in fh:
                     t = line.strip().split()
@@ -195,7 +203,9 @@ class MF6Model:
             current = float(self.mf6.get_current_time())
 
             if current < start_days:
-                self.logger.warning(f"current time {current} < start {start_days}; advancing to start first")
+                self.logger.warning(
+                    f"current time {current} < start {start_days}; advancing to start first"
+                )
                 while current < start_days:
                     self.mf6.prepare_time_step(0.0)
                     self.mf6.do_time_step()
@@ -239,7 +249,11 @@ class MF6Model:
     def set_finf_for_uzf_cells(self, finf_values: np.ndarray) -> None:
         """Write FINF (ft/day) for active UZF cells."""
         try:
-            assert self.mf6 is not None and self.var_finf is not None and self.nuzfcells is not None
+            assert (
+                self.mf6 is not None
+                and self.var_finf is not None
+                and self.nuzfcells is not None
+            )
             if len(finf_values) != self.nuzfcells:
                 raise ValueError("finf length must match active UZF cells")
             self.mf6.set_value(self.var_finf, finf_values.astype(float))
@@ -256,4 +270,3 @@ class MF6Model:
         except Exception as e:
             self.logger.error(f"error getting GWD: {e}")
             raise
-

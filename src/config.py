@@ -80,7 +80,9 @@ def _validate(cfg: dict[str, Any]) -> None:
     # types and shapes
     vgs = cfg["coupling"]["vic_grid_shape"]
     if not (isinstance(vgs, (list, tuple)) and len(vgs) == 2):
-        raise ConfigError("coupling.vic_grid_shape must be a 2-item list [nrows, ncols]")
+        raise ConfigError(
+            "coupling.vic_grid_shape must be a 2-item list [nrows, ncols]"
+        )
 
 
 def _normalize_paths(cfg: dict[str, Any]) -> None:
@@ -94,7 +96,14 @@ def _normalize_paths(cfg: dict[str, Any]) -> None:
         ("mf6", ("workspace", "dll")),
         (
             "vic",
-            ("dir", "exe", "global_param", "outputs_dir", "exchange_dir", "params_file"),
+            (
+                "dir",
+                "exe",
+                "global_param",
+                "outputs_dir",
+                "exchange_dir",
+                "params_file",
+            ),
         ),
         ("coupling", ("table_csv",)),
     ):
