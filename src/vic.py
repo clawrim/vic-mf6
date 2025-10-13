@@ -167,7 +167,7 @@ class VICModel:
             else None
         )
         if state_fn:
-            state_path = os.path.join(self.outputs_dir, state_fn)
+            state_path = os.path.join(self.vic_dir, state_fn)
             if os.path.exists(state_path):
                 self.logger.info(f"State file exists: {state_path}")
             else:
