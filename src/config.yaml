@@ -1,0 +1,25 @@
+mf6:
+  workspace: "../../../MF6/rgtihm/model_2100"
+  dll: "~/usr/local/src/modflow6/bin/libmf6.so"
+  start_date: "1940-03-01"
+  model_name: "rgtihm_2100"
+
+vic:
+  dir: "../nm_image/"
+  exe: "~/usr/local/src/VIC/vic/drivers/image/vic_image.exe"
+  global_param: "../nm_image/global_param_nc4.txt"
+  outputs_dir: "../nm_image/outputs"
+  exchange_dir: "../nm_image/exchange_data"
+  params_file: "../nm_image/nc4_params.nc"
+  wbal_var: "OUT_BASEFLOW"
+  init_moist_layer: 2
+
+coupling:
+  table_csv: "../nm_image/exchange_data/mf6_vic_join_new.csv"
+  start_date: "1990-01-01"
+  end_date: "2100-12-31"
+  vic_grid_shape: [227, 212]
+
+logging:
+  file: "./logs/stdout.log"
+  level: "INFO"
