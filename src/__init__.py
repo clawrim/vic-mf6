@@ -19,7 +19,5 @@ vicmf6 package init.
 
 from __future__ import annotations
 
-from . import mf6, vic, config, coupling, cli
-
 __all__ = ["mf6", "vic", "config", "coupling", "cli"]
 __version__ = "0.1.0"

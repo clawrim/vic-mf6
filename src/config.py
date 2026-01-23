@@ -46,7 +46,6 @@ def load_config(path: str | os.PathLike[str]) -> dict[str, Any]:
     _normalize_paths(cfg)
     return cfg
 
-
 def _validate(cfg: dict[str, Any]) -> None:
     # top-level sections
     for sec in ("mf6", "vic", "coupling"):
@@ -54,7 +53,7 @@ def _validate(cfg: dict[str, Any]) -> None:
             raise ConfigError(f"missing section: {sec}")
 
     # mf6
-    for key in ("workspace", "dll", "start_date", "model_name"):
+    for key in ("workspace", "dll", "start_date"):
         if key not in cfg["mf6"]:
             raise ConfigError(f"mf6.{key} is required")
 
@@ -73,17 +72,9 @@ def _validate(cfg: dict[str, Any]) -> None:
             raise ConfigError(f"vic.{key} is required")
 
     # coupling
-    for key in ("table_csv", "start_date", "end_date", "vic_grid_shape"):
+    for key in ("table_csv", "start_date", "end_date"):
         if key not in cfg["coupling"]:
             raise ConfigError(f"coupling.{key} is required")
-
-    # types and shapes
-    vgs = cfg["coupling"]["vic_grid_shape"]
-    if not (isinstance(vgs, (list, tuple)) and len(vgs) == 2):
-        raise ConfigError(
-            "coupling.vic_grid_shape must be a 2-item list [nrows, ncols]"
-        )
-
 
 def _normalize_paths(cfg: dict[str, Any]) -> None:
     # expanduser on all obvious path-like entries

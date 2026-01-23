@@ -14,15 +14,20 @@
 #   Department of Civil Engineering, New Mexico State University
 ###############################################################################
 """
-This module provides the monthly VIC–MF6 coupling loop to run VIC, step MF6,
-exchange FINF/GWD, and log results.
+vic → mf6 one-way coupling using rch recharge.
+
+key idea:
+- vic provides daily OUT_BASEFLOW as a depth per timestep (mm/day for daily runs)
+- convert that to a recharge rate (model length units / day)
+- aggregate vic cells to mf6 cells using a precomputed join table
+- set mf6 rch recharge, then advance mf6 by one stress period
+
+this does not do two-way feedback (no gwd → vic parameter update).
 """
 
 from __future__ import annotations
 
 import os
-import glob
-import calendar
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -30,410 +35,400 @@ import numpy as np
 import pandas as pd
 from netCDF4 import Dataset
 
+from mf6 import MF6Model
+from vic import VICModel
+
 
 class CouplingManager:
     def __init__(
         self,
-        mf6_model,
-        vic_model,
+        mf6_model: MF6Model,
+        vic_model: VICModel,
         coupling_table_csv: str,
         params_file: str,
         log_file: str,
         logger,
-        *,
-        vic_grid_shape: tuple[int, int],
-        model_name: str,
     ) -> None:
-        """Coordinate the VIC–MF6 monthly exchange using the provided models and inputs."""
         self.mf6 = mf6_model
         self.vic = vic_model
-        self.coupling_table = pd.read_csv(os.path.expanduser(coupling_table_csv))
-        self.params_file = os.path.expanduser(params_file)
+        self.coupling_table_csv = os.path.expanduser(coupling_table_csv)
+
+        # resolve params file relative to vic dir if not absolute
+        pf = os.path.expanduser(params_file)
+        if not os.path.isabs(pf):
+            pf = os.path.join(self.vic.vic_dir, pf)
+        self.params_file = pf
+
         self.log_file = os.path.expanduser(log_file)
         self.logger = logger
 
-        # single source of truth for units
-        self.mm_to_ft = 1.0 / 304.8
-        self.ft_to_mm = 304.8
-
-        self.n_cells = self.mf6.nuzfcells
-        self.vic_grid_shape = tuple(vic_grid_shape)
-        self.vic_id_to_indices: dict[int, tuple[int, int]] = {}
+        self.coupling_table: Optional[pd.DataFrame] = None
         self.vic_lat: Optional[np.ndarray] = None
         self.vic_lon: Optional[np.ndarray] = None
+        self.vic_grid_shape: Optional[tuple[int, int]] = None
+        self.vic_id_to_indices: dict[int, tuple[int, int]] = {}
 
-        pattern = os.path.join(self.mf6.workspace, f"{model_name}*.uzf")
-        matches = glob.glob(pattern)
-        self.uzf_file = (
-            matches[0]
-            if matches
-            else os.path.join(self.mf6.workspace, f"{model_name}.uzf")
-        )
+        # mf6 cell (i,j) → list of (vic_id, ratio)
+        self.mf6_cell_to_contrib: dict[tuple[int, int], list[tuple[int, float]]] = {}
 
-        self.skipped_ids_file = os.path.join(
-            self.vic.exchange_dir, "skipped_mf6_ids.txt"
-        )
-        self.uzf_mapping = self._load_uzf_mapping()
+        # unit conversion
+        self.mm_to_model = self._mm_to_model_length(self.mf6.length_units)
 
-    def _load_uzf_mapping(self) -> dict[str, int]:
-        """Parse packagedata from the UZF file and build mf6_id→iuzno mapping."""
-        try:
-            if not os.path.exists(self.uzf_file):
-                self.logger.error(f"uzf file not found: {self.uzf_file}")
-                return {}
-            with open(self.uzf_file, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            start_idx = (
-                next(i for i, ln in enumerate(lines) if "BEGIN packagedata" in ln) + 1
-            )
-            end_idx = next(i for i, ln in enumerate(lines) if "END packagedata" in ln)
-            uzf_data = [ln.split()[:4] for ln in lines[start_idx:end_idx]]
-            uzf_df = pd.DataFrame(
-                uzf_data, columns=["iuzno", "nlay", "nrow", "ncol"]
-            ).astype(int)
-            uzf_df["mf6_id"] = uzf_df.apply(
-                lambda x: f"{x['nrow']:03d}{x['ncol']:03d}", axis=1
-            )
-            self.logger.info(f"loaded {len(uzf_df)} uzf rows")
-            return dict(zip(uzf_df["mf6_id"], uzf_df["iuzno"]))
-        except Exception as e:
-            self.logger.error(f"load uzf mapping failed: {e}")
-            return {}
+        # optional recharge sanity controls (can be overwritten from yaml via attributes)
+        self.recharge_scale = 1.0
+        self.recharge_min_mm_day: Optional[float] = None
+        self.recharge_max_mm_day: Optional[float] = None
 
-    def _mf6_id_to_iuzno(self, mf6_id: Any) -> int:
-        """Translate numeric/string mf6_id to iuzno; record missing ids to a text file."""
-        try:
-            k = str(int(mf6_id)).zfill(6)
-            if k in self.uzf_mapping:
-                return int(self.uzf_mapping[k])
-            self.logger.warning(f"mf6_id not in uzf: {mf6_id}")
-            with open(self.skipped_ids_file, "a", encoding="utf-8") as f:
-                f.write(f"{mf6_id}\n")
-            return -1
-        except (ValueError, TypeError) as e:
-            self.logger.warning(f"bad mf6_id: {mf6_id} ({e})")
-            with open(self.skipped_ids_file, "a", encoding="utf-8") as f:
-                f.write(f"{mf6_id}\n")
-            return -1
+    def setup_debug_csv(logfile):
+	    sys.stdout = open(logfile, "w")
+	    csv_writer = csv.writer(sys.stdout)
+	    csv_writer.writerow(["timestamp", "message"])  # Headers for CSV
+	    return csv_writer
 
+    # init
     def initialize(self) -> None:
-        """Validate inputs, map mf6_id→iuzno, and build vic_id→(lat_idx, lon_idx) mapping."""
         try:
-            os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                f.write(
-                    "stress_period,mf6_id,vic_id,finf_ft_per_day,uzf_gwd_ft_per_day,init_moist_mm\n"
-                )
+            if not os.path.exists(self.coupling_table_csv):
+                raise FileNotFoundError(f"coupling table not found: {self.coupling_table_csv}")
 
-            self.coupling_table["iuzno"] = self.coupling_table["mf6_id"].apply(
-                self._mf6_id_to_iuzno
-            )
-            valid = (self.coupling_table["iuzno"] >= 0) & (
-                self.coupling_table["iuzno"] < self.n_cells
-            )
-            self.coupling_table = self.coupling_table.loc[valid].copy()
-            if self.coupling_table.empty:
-                raise ValueError(
-                    "no valid iuzno mappings; check join csv and uzf package"
-                )
-
-            ratio_sum = self.coupling_table.groupby("mf6_id")["mf6_area_ratio"].sum()
-            bad = ratio_sum[~np.isclose(ratio_sum, 1.0, atol=1e-6)]
-            if not bad.empty:
-                self.logger.warning(
-                    f"area ratios not summing to 1 for {len(bad)} mf6_id samples: {bad.head().to_dict()}"
-                )
-
+            self.coupling_table = pd.read_csv(self.coupling_table_csv)
+            self._validate_coupling_table()
             self._initialize_vic_id_mapping()
+            self._build_mf6_cell_mapping()
+
+            self._init_log_file()
+
+            self.logger.info(f"coupling table rows={len(self.coupling_table)}")
+            self.logger.info(f"mapped vic ids={len(self.vic_id_to_indices)}")
+            self.logger.info(f"unique mf6 cells mapped={len(self.mf6_cell_to_contrib)}")
+            self.logger.info(f"mm_to_model={self.mm_to_model}")
+
         except Exception as e:
             self.logger.error(f"coupling initialize failed: {e}")
             raise
 
+    def _validate_coupling_table(self) -> None:
+        assert self.coupling_table is not None
+        required = {"mf6_id", "vic_id", "mf6_area_ratio"}
+        missing = required - set(self.coupling_table.columns)
+        if missing:
+            raise ValueError(f"coupling table missing columns: {sorted(missing)}")
+
+        # allow either b_lat/b_lon or explicit vic_i/vic_j for vic mapping
+        have_blat = "b_lat" in self.coupling_table.columns and "b_lon" in self.coupling_table.columns
+        have_vic_ij = "vic_i" in self.coupling_table.columns and "vic_j" in self.coupling_table.columns
+        if not (have_blat or have_vic_ij):
+            self.logger.warning(
+                "coupling table has no b_lat/b_lon or vic_i/vic_j; vic_id mapping may be incomplete"
+            )
+
     def _initialize_vic_id_mapping(self) -> None:
-        """Create vic_id→(lat_idx, lon_idx) map by nearest lat/lon index; keep per-row argmin behavior."""
+        ds: Optional[Dataset] = None
         try:
             ds = Dataset(self.params_file, "r")
-            lat = ds.variables.get("lat")
-            lon = ds.variables.get("lon")
-            if lat is None or lon is None:
-                ds.close()
-                raise Exception("lat/lon not found in params file")
-            lat = lat[:]
-            lon = lon[:]
-            ds.close()
+            lat_var = ds.variables.get("lat")
+            lon_var = ds.variables.get("lon")
+            if lat_var is None or lon_var is None:
+                raise RuntimeError("lat/lon not found in params file")
+            lat = lat_var[:]
+            lon = lon_var[:]
 
             if lat.ndim == 2:
                 self.vic_lat = lat[:, 0]
             else:
                 self.vic_lat = lat
+
             if lon.ndim == 2:
                 self.vic_lon = lon[0, :]
             else:
                 self.vic_lon = lon
 
-            self.logger.info(
-                f"vic grid: lat={self.vic_lat.shape}, lon={self.vic_lon.shape}"
-            )
+            self.vic_grid_shape = (int(self.vic_lat.size), int(self.vic_lon.size))
+            self.logger.info(f"vic grid: lat={self.vic_lat.shape}, lon={self.vic_lon.shape}")
 
+            assert self.coupling_table is not None
+
+            # if b_lat/b_lon exist: nearest-index mapping
+            if "b_lat" in self.coupling_table.columns and "b_lon" in self.coupling_table.columns:
+                for _, row in self.coupling_table.iterrows():
+                    vic_id = int(row["vic_id"])
+                    b_lat = float(row["b_lat"])
+                    b_lon = float(row["b_lon"])
+                    lat_idx = int(np.abs(self.vic_lat - b_lat).argmin())
+                    lon_idx = int(np.abs(self.vic_lon - b_lon).argmin())
+                    self.vic_id_to_indices[vic_id] = (lat_idx, lon_idx)
+                return
+
+            # if we have explicit vic_i/vic_j, use those directly
+            if "vic_i" in self.coupling_table.columns and "vic_j" in self.coupling_table.columns:
+                nlat, nlon = self.vic_grid_shape
+                mapped = 0
+                for _, row in self.coupling_table.iterrows():
+                    vic_id = int(row["vic_id"])
+                    lat_idx = int(row["vic_i"])
+                    lon_idx = int(row["vic_j"])
+                    if 0 <= lat_idx < nlat and 0 <= lon_idx < nlon:
+                        self.vic_id_to_indices[vic_id] = (lat_idx, lon_idx)
+                        mapped += 1
+                self.logger.info(f"initialized vic_id mapping from vic_i/vic_j for {mapped} rows")
+                return
+
+            # fallback: assume vic_id is a 1d linear index over (lat,lon), row-major
+            nlat, nlon = self.vic_grid_shape
             for _, row in self.coupling_table.iterrows():
                 vic_id = int(row["vic_id"])
-                b_lat = float(row["b_lat"])
-                b_lon = float(row["b_lon"])
-                lat_idx = np.abs(self.vic_lat - b_lat).argmin()
-                lon_idx = np.abs(self.vic_lon - b_lon).argmin()
-                if not (
-                    np.isclose(self.vic_lat[lat_idx], b_lat, atol=1e-5)
-                    and np.isclose(self.vic_lon[lon_idx], b_lon, atol=1e-5)
-                ):
-                    self.logger.warning(
-                        f"vic_id {vic_id} not close to grid (b_lat={b_lat}, b_lon={b_lon})"
-                    )
-                else:
-                    self.vic_id_to_indices[vic_id] = (int(lat_idx), int(lon_idx))
+                if vic_id < 0 or vic_id >= nlat * nlon:
+                    continue
+                lat_idx = int(vic_id // nlon)
+                lon_idx = int(vic_id % nlon)
+                self.vic_id_to_indices[vic_id] = (lat_idx, lon_idx)
 
-            self.logger.info(f"mapped {len(self.vic_id_to_indices)} vic ids")
         except Exception as e:
             self.logger.error(f"init vic_id mapping failed: {e}")
-            try:
+            raise
+        finally:
+            if ds is not None:
                 ds.close()
-            except Exception:
-                pass
+
+    def _build_mf6_cell_mapping(self) -> None:
+        """
+        build mapping from join table.
+        mf6_id is expected to be like 'RRRCCC' (row/col), possibly 1-based.
+        """
+        assert self.coupling_table is not None
+        assert self.mf6.nrow is not None and self.mf6.ncol is not None
+
+        # decode mf6_id → (row, col) and infer indexing base
+        rows: list[int] = []
+        cols: list[int] = []
+        for mf6_id in self.coupling_table["mf6_id"].astype(str).tolist():
+            r, c = self._decode_mf6_id(mf6_id)
+            rows.append(r)
+            cols.append(c)
+
+        base = self._infer_mf6_id_base(rows, cols, self.mf6.nrow, self.mf6.ncol)
+
+        for _, row in self.coupling_table.iterrows():
+            mf6_id = str(row["mf6_id"])
+            r_raw, c_raw = self._decode_mf6_id(mf6_id)
+            i = int(r_raw - base)
+            j = int(c_raw - base)
+
+            if not (0 <= i < self.mf6.nrow and 0 <= j < self.mf6.ncol):
+                continue
+
+            vic_id = int(row["vic_id"])
+            ratio = float(row["mf6_area_ratio"])
+            if ratio <= 0.0:
+                continue
+
+            key = (i, j)
+            self.mf6_cell_to_contrib.setdefault(key, []).append((vic_id, ratio))
+
+        # normalize ratios per mf6 cell (helps when the join table is slightly off)
+        for key, lst in self.mf6_cell_to_contrib.items():
+            s = sum(r for _, r in lst)
+            if s <= 0.0:
+                continue
+            self.mf6_cell_to_contrib[key] = [(vid, r / s) for vid, r in lst]
+
+    @staticmethod
+    def _decode_mf6_id(mf6_id: str) -> tuple[int, int]:
+        s = mf6_id.strip()
+        # allow ints and strings like 113106
+        s = f"{int(float(s)):06d}"
+        r = int(s[:3])
+        c = int(s[3:])
+        return r, c
+
+    @staticmethod
+    def _infer_mf6_id_base(rows: list[int], cols: list[int], nrow: int, ncol: int) -> int:
+        """
+        return 0 for 0-based ids, 1 for 1-based ids.
+        """
+        rmin, rmax = min(rows), max(rows)
+        cmin, cmax = min(cols), max(cols)
+
+        # common cases
+        if rmin == 0 or cmin == 0:
+            return 0
+        if rmax == nrow and cmax == ncol:
+            return 1
+        if rmax == nrow - 1 and cmax == ncol - 1:
+            return 0
+
+        # fallback: choose base that gives most in-range cells
+        score0 = sum(0 <= (r - 0) < nrow and 0 <= (c - 0) < ncol for r, c in zip(rows, cols))
+        score1 = sum(0 <= (r - 1) < nrow and 0 <= (c - 1) < ncol for r, c in zip(rows, cols))
+        return 0 if score0 >= score1 else 1
+
+    @staticmethod
+    def _mm_to_model_length(length_units: str) -> float:
+        u = str(length_units).lower().strip()
+        if u.startswith("ft") or u.startswith("foot") or u.startswith("feet"):
+            return 0.0032808398950131233  # mm → ft
+        return 1.0e-3  # mm → m
+
+    def _init_log_file(self) -> None:
+        os.makedirs(os.path.dirname(self.log_file), exist_ok=True)
+        if not os.path.exists(self.log_file):
+            with open(self.log_file, "w", encoding="utf-8") as f:
+                f.write(
+                    "sp_index,sp_start,sp_end,perlen_days,"
+                    "mean_baseflow_mm_day,mean_recharge_mm_day,total_recharge_volume_m3\n"
+                )
+
+    # coupling loop
+    def run(self, start_date: datetime, end_date: datetime) -> None:
+        """
+        run coupling from start_date to end_date (inclusive).
+
+        stepping is controlled by mf6 tdis perlen if available; otherwise defaults to 1-day steps.
+        """
+        try:
+            if end_date < start_date:
+                return
+
+            # align mf6 to coupling start
+            if start_date > self.mf6.start_date:
+                self.mf6.step_to_date(start_date)
+
+            sp_start = start_date
+            sp_index = 0
+
+            perlen_list = self.mf6.perlen_days or []
+            use_mf6_periods = len(perlen_list) > 0
+
+            while sp_start <= end_date:
+                if use_mf6_periods and sp_index < len(perlen_list):
+                    perlen = float(perlen_list[sp_index])
+                    ndays = max(1, int(round(perlen)))
+                else:
+                    ndays = 1
+
+                sp_end = min(sp_start + timedelta(days=ndays - 1), end_date)
+
+                self.logger.info(f"coupling sp={sp_index} {sp_start.date()} -> {sp_end.date()} (ndays={ndays})")
+
+                # VIC: run for this period
+                wbal_tag = sp_start.strftime("%Y-%m-%d")
+                state_tag = sp_end.strftime("%Y%m%d")
+                date_tag = f"{sp_start.year:04d}_{sp_start.month:02d}_{sp_start.day:02d}"
+
+                sp_param = self.vic.update_global_param(
+                    date_tag=date_tag,
+                    sp_start=sp_start,
+                    sp_end=sp_end,
+                    prev_date=None,
+                    first=(sp_index == 0),
+                )
+                ok = self.vic.run(sp_param)
+                if not ok:
+                    raise RuntimeError("vic failed")
+
+                baseflow = self.vic.read_vic_wb(wbal_tag)  # mm per timestep (daily)
+                bf_mm_day = self._period_mean_mm_day(baseflow, expected_days=ndays)
+
+                # compute mf6 recharge array in model length/day
+                recharge = self.compute_recharge_array(bf_mm_day) * self.recharge_scale
+
+                # optional clipping in mm/day space (before mm→model conversion)
+                if self.recharge_min_mm_day is not None or self.recharge_max_mm_day is not None:
+                    r_mm_day = recharge / self.mm_to_model
+                    if self.recharge_min_mm_day is not None:
+                        r_mm_day = np.maximum(r_mm_day, float(self.recharge_min_mm_day))
+                    if self.recharge_max_mm_day is not None:
+                        r_mm_day = np.minimum(r_mm_day, float(self.recharge_max_mm_day))
+                    recharge = r_mm_day * self.mm_to_model
+
+                self.mf6.set_recharge(recharge)
+
+                # advance mf6 through the same period
+                self.mf6.step_to_date(sp_end)
+
+                # log summary
+                mean_bf = float(np.nanmean(bf_mm_day))
+                mean_rch_mm = float(np.nanmean(recharge / self.mm_to_model))
+                vol_m3 = float(self._recharge_volume_m3(recharge, ndays))
+
+                with open(self.log_file, "a", encoding="utf-8") as f:
+                    f.write(
+                        f"{sp_index},{sp_start.date()},{sp_end.date()},{ndays},"
+                        f"{mean_bf:.6g},{mean_rch_mm:.6g},{vol_m3:.6g}\n"
+                    )
+
+                sp_index += 1
+                sp_start = sp_end + timedelta(days=1)
+
+        except Exception as e:
+            self.logger.error(f"coupling run failed: {e}")
             raise
 
-    def compute_finf(self, baseflow: Optional[np.ndarray]) -> np.ndarray:
-        """Aggregate VIC baseflow (mm) to UZF cells (ft/day) using the join table and area ratios."""
-        try:
-            finf = np.zeros(self.n_cells, dtype=float)
-            skipped = []
-            if baseflow is None:
-                self.logger.warning("baseflow is None; finf remains zeros")
-                return finf
+    def _period_mean_mm_day(self, arr: np.ndarray, expected_days: int) -> np.ndarray:
+        """
+        vic output can be:
+          - (time, lat, lon)
+          - (lat, lon)
 
-            if baseflow.ndim == 3:
-                bf2d = baseflow[-1, :, :]
-            else:
-                bf2d = baseflow
+        this returns a 2d array (lat, lon) of mean mm/day over the coupling period.
+        """
+        a = np.asarray(arr, dtype=float)
+        if a.ndim == 3:
+            nt = a.shape[0]
+            if expected_days > 0 and nt != expected_days:
+                self.logger.warning(f"vic wbal time dim nt={nt} but expected_days={expected_days}; using mean over nt")
+            return np.nanmean(a, axis=0)
+        if a.ndim == 2:
+            return a
+        raise ValueError(f"unexpected vic wbal array shape: {a.shape}")
 
-            for _, row in self.coupling_table.iterrows():
-                vic_id = int(row["vic_id"])
-                iuzno = int(row["iuzno"])
-                ratio = float(row["mf6_area_ratio"])
-                if iuzno < 0 or iuzno >= self.n_cells:
-                    skipped.append(row["mf6_id"])
+    def compute_recharge_array(self, bf_mm_day_2d: np.ndarray) -> np.ndarray:
+        """
+        aggregate vic baseflow (mm/day) to mf6 recharge (model length/day) on (nrow,ncol).
+        """
+        assert self.mf6.nrow is not None and self.mf6.ncol is not None
+        assert self.mf6.surface_active is not None
+
+        rch = np.zeros((self.mf6.nrow, self.mf6.ncol), dtype=float)
+
+        skipped = 0
+        for (i, j), lst in self.mf6_cell_to_contrib.items():
+            if not self.mf6.surface_active[i, j]:
+                continue
+
+            s_mm = 0.0
+            for vic_id, ratio in lst:
+                ij = self.vic_id_to_indices.get(int(vic_id))
+                if ij is None:
+                    skipped += 1
                     continue
-                if vic_id not in self.vic_id_to_indices:
-                    skipped.append(row["mf6_id"])
-                    continue
-                lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
+                lat_idx, lon_idx = ij
                 try:
-                    bf_mm = float(bf2d[lat_idx, lon_idx])
+                    v = float(bf_mm_day_2d[lat_idx, lon_idx])
                 except Exception:
-                    skipped.append(row["mf6_id"])
+                    skipped += 1
                     continue
-                finf[iuzno] += bf_mm * self.mm_to_ft * ratio
-
-            np.savetxt(os.path.join(self.vic.exchange_dir, "computed_finf.txt"), finf)
-            self.logger.info(
-                f"finf>0 count={int((finf > 0).sum())}, mean={float(finf.mean()):.6f} ft/day"
-            )
-            if skipped:
-                self.logger.info(
-                    f"skipped {len(skipped)} mf6 ids (mapping/baseflow issues)"
-                )
-            return finf
-        except Exception as e:
-            self.logger.error(f"compute_finf failed: {e}")
-            return np.zeros(self.n_cells, dtype=float)
-
-    def update_vic_params(
-        self, uzf_gwd: np.ndarray, baseflow: Optional[np.ndarray]
-    ) -> bool:
-        """Update VIC init_moist at layer index 2 using MF6 UZF GWD (ft/day) converted to mm and baseflow mm."""
-        try:
-            self.logger.info(f"reading {self.params_file}")
-            ds = Dataset(self.params_file, "r+", format="NETCDF4")
-            if "init_moist" not in ds.variables:
-                self.logger.warning("init_moist not found")
-                ds.close()
-                return False
-            init_moist = ds.variables["init_moist"]
-
-            vic_gwd: dict[int, float] = {}
-            for _, row in self.coupling_table.iterrows():
-                vic_id = int(row["vic_id"])
-                iuzno = int(row["iuzno"])
-                vic_ratio = float(row.get("vic_area_ratio", 1.0))
-                if iuzno < 0 or iuzno >= len(uzf_gwd):
+                if not np.isfinite(v) or v <= 0.0:
                     continue
-                gwd_mm = float(uzf_gwd[iuzno]) * self.ft_to_mm * vic_ratio
-                vic_gwd[vic_id] = vic_gwd.get(vic_id, 0.0) + gwd_mm
+                s_mm += v * ratio
 
-            for vic_id, gwd_mm in vic_gwd.items():
-                if vic_id not in self.vic_id_to_indices:
-                    continue
-                lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
-                bf_mm = 0.0
-                if baseflow is not None:
-                    try:
-                        bf_mm = float(baseflow[-1, lat_idx, lon_idx])
-                    except Exception:
-                        bf_mm = 0.0
-                new_moist = bf_mm + (gwd_mm if gwd_mm > 0 else 0.0)
-                init_moist[2, lat_idx, lon_idx] = new_moist
-            ds.close()
-            self.logger.info("vic params updated (netcdf4)")
-            return True
-        except Exception as e:
-            self.logger.error(f"update vic params failed with NETCDF4: {e}")
-            # keep the original fallback pattern; vic_gwd scope intentionally unchanged
-            try:
-                ds = Dataset(self.params_file, "r+", format="NETCDF3_64BIT")
-                init_moist = ds.variables["init_moist"]
-                for vic_id, gwd_mm in vic_gwd.items():  # noqa: F821
-                    if vic_id not in self.vic_id_to_indices:
-                        continue
-                    lat_idx, lon_idx = self.vic_id_to_indices[vic_id]
-                    bf_mm = 0.0
-                    if baseflow is not None:
-                        try:
-                            bf_mm = float(baseflow[-1, lat_idx, lon_idx])
-                        except Exception:
-                            bf_mm = 0.0
-                    new_moist = max(
-                        min(bf_mm + (gwd_mm if gwd_mm > 0 else 0.0), 100.0), 0.1
-                    )
-                    init_moist[2, lat_idx, lon_idx] = new_moist
-                ds.close()
-                self.logger.info("vic params updated with NETCDF3_64BIT")
-                return True
-            except Exception as e2:
-                self.logger.error(f"fallback update failed: {e2}")
-                try:
-                    ds.close()
-                except Exception:
-                    pass
-                return False
+            rch[i, j] = s_mm * self.mm_to_model
 
-    def log_results(
-        self,
-        stress_period: int,
-        finf: np.ndarray,
-        uzf_gwd: np.ndarray,
-        init_moist_last: np.ndarray,
-    ) -> None:
-        """Append a single line per mapping to the CSV summary for the current stress period."""
-        try:
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                for _, row in self.coupling_table.iterrows():
-                    mf6_id = int(row["mf6_id"])
-                    iuzno = int(row["iuzno"])
-                    vic_id = int(row["vic_id"])
-                    lat_idx, lon_idx = self.vic_id_to_indices.get(vic_id, (-1, -1))
-                    im = (
-                        float(init_moist_last[lat_idx, lon_idx])
-                        if (lat_idx >= 0 and lon_idx >= 0)
-                        else np.nan
-                    )
-                    finf_val = float(finf[iuzno]) if 0 <= iuzno < len(finf) else np.nan
-                    gwd_val = (
-                        float(uzf_gwd[iuzno]) if 0 <= iuzno < len(uzf_gwd) else np.nan
-                    )
-                    f.write(
-                        f"{stress_period},{mf6_id},{vic_id},{finf_val},{gwd_val},{im}\n"
-                    )
-        except Exception as e:
-            self.logger.error(f"log write failed: {e}")
+        if skipped > 0:
+            self.logger.warning(f"skipped vic contributions: {skipped}")
 
-    def run(self, vic_start_date: datetime, coupling_end_date: datetime) -> None:
-        """Run the monthly loop: VIC run, MF6 step, UZF I/O, VIC param update, and CSV logging."""
-        self.logger.info("starting vic–mf6 coupling")
-        first = True
-        prev_date: Optional[str] = None
-        mf6_current_date = self.mf6.start_date
+        return rch
 
-        vic_start_minus_one = vic_start_date - timedelta(days=1)
-        self.logger.info(
-            f"mf6 pre-run: from {mf6_current_date} to {vic_start_minus_one} (coupling start date)"
-        )
-        try:
-            self.mf6.run_to_date(vic_start_minus_one, mf6_current_date)  # type: ignore[attr-defined]
-            mf6_current_date = vic_start_minus_one
-        except Exception as e:
-            self.logger.error(f"mf6 pre-run failed: {e}")
-            return
+    def _recharge_volume_m3(self, rch_len_day: np.ndarray, ndays: int) -> float:
+        """
+        compute total recharge volume over the period if delr/delc exist.
+        """
+        areas = self.mf6.cell_areas()
+        if areas is None:
+            return float("nan")
+        r = np.asarray(rch_len_day, dtype=float)
+        if self.mf6.length_units.startswith("ft"):
+            # convert ft to m for volume
+            r = r * 0.3048
+        return float(np.nansum(r * areas) * float(ndays))
 
-        vic_current = vic_start_date
-        sp_idx = 0
-        while vic_current <= coupling_end_date:
-            last_day = calendar.monthrange(vic_current.year, vic_current.month)[1]
-            vic_period_end = datetime(vic_current.year, vic_current.month, last_day)
-
-            # keep file-naming in line with the VIC convention
-            #   wbal:   wbal.YYYY-MM-DD.nc      (first day of the month)
-            #   state:  state.YYYYMMDD_00000.nc (last day of the month)
-            wbal_date_tag = vic_current.strftime("%Y-%m-%d")
-            state_date_tag = vic_period_end.strftime("%Y%m%d")
-            date_tag = f"{vic_current.year:04d}_{vic_current.month:02d}"  # keep for global_param filename
-
-            sp_param = self.vic.update_global_param(
-                date_tag=date_tag,
-                sp_start=vic_current,
-                sp_end=vic_period_end,
-                prev_date=prev_date,
-                first=first,
-            )
-            ok = self.vic.run(sp_param)
-            if not ok:
-                self.logger.error(f"vic failed for {date_tag}")
-                return
-            self.vic.move_files(state_date_tag, wbal_date_tag)
-            baseflow = self.vic.read_vic_wb(wbal_date_tag)
-
-            self.logger.info(f"mf6 stepping to {vic_period_end}")
-            try:
-                self.mf6.step_to_end_of_month(vic_current.year, vic_current.month)
-            except Exception as e:
-                self.logger.error(f"mf6 step failed: {e}")
-                return
-
-            try:
-                uzf_gwd = self.mf6.get_gwd_for_uzf_cells()
-            except Exception as e:
-                self.logger.error(f"get gwd failed: {e}")
-                return
-
-            finf = self.compute_finf(baseflow)
-            try:
-                self.mf6.set_finf_for_uzf_cells(finf)
-                np.savetxt(os.path.join(self.vic.exchange_dir, "mf6_finf.txt"), finf)
-                non_zero_iuzno = np.where(finf > 0)[0]
-                np.savetxt(
-                    os.path.join(self.vic.exchange_dir, "non_zero_iuzno.txt"),
-                    non_zero_iuzno,
-                    fmt="%d",
-                )
-            except Exception as e:
-                self.logger.error(f"set finf failed: {e}")
-                return
-
-            try:
-                if not self.update_vic_params(uzf_gwd, baseflow):
-                    self.logger.warning(f"vic param update failed for {date_tag}")
-            except Exception as e:
-                self.logger.error(f"vic param update raised: {e}")
-                return
-
-            try:
-                ds = Dataset(self.params_file, "r")
-                im3 = ds.variables["init_moist"][2, :, :]
-                ds.close()
-            except Exception:
-                im3 = np.zeros(self.vic_grid_shape, dtype=float)
-            self.log_results(sp_idx, finf, uzf_gwd, im3)
-
-            sp_idx += 1
-            vic_current = (vic_period_end + timedelta(days=1)).replace(day=1)
-            first = False
-            prev_date = state_date_tag
-
-        self.logger.info("coupling complete")
