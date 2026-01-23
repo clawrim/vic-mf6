@@ -14,7 +14,7 @@
 #   Department of Civil Engineering, New Mexico State University
 ###############################################################################
 """
-vic → mf6 one-way coupling using rch recharge.
+vic to mf6 one-way coupling using rch recharge.
 
 key idea:
 - vic provides daily OUT_BASEFLOW as a depth per timestep (mm/day for daily runs)
@@ -22,7 +22,7 @@ key idea:
 - aggregate vic cells to mf6 cells using a precomputed join table
 - set mf6 rch recharge, then advance mf6 by one stress period
 
-this does not do two-way feedback (no gwd → vic parameter update).
+this does not do two-way feedback
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ class CouplingManager:
         self.vic_grid_shape: Optional[tuple[int, int]] = None
         self.vic_id_to_indices: dict[int, tuple[int, int]] = {}
 
-        # mf6 cell (i,j) → list of (vic_id, ratio)
+        # mf6 cell (i,j) to list of (vic_id, ratio)
         self.mf6_cell_to_contrib: dict[tuple[int, int], list[tuple[int, float]]] = {}
 
         # unit conversion
@@ -79,11 +79,6 @@ class CouplingManager:
         self.recharge_min_mm_day: Optional[float] = None
         self.recharge_max_mm_day: Optional[float] = None
 
-    def setup_debug_csv(logfile):
-	    sys.stdout = open(logfile, "w")
-	    csv_writer = csv.writer(sys.stdout)
-	    csv_writer.writerow(["timestamp", "message"])  # Headers for CSV
-	    return csv_writer
 
     # init
     def initialize(self) -> None:
@@ -198,7 +193,7 @@ class CouplingManager:
         assert self.coupling_table is not None
         assert self.mf6.nrow is not None and self.mf6.ncol is not None
 
-        # decode mf6_id → (row, col) and infer indexing base
+        # decode mf6_id (row, col) and infer indexing base
         rows: list[int] = []
         cols: list[int] = []
         for mf6_id in self.coupling_table["mf6_id"].astype(str).tolist():
@@ -295,6 +290,7 @@ class CouplingManager:
 
             sp_start = start_date
             sp_index = 0
+            prev_state_tag: Optional[str] = None
 
             perlen_list = self.mf6.perlen_days or []
             use_mf6_periods = len(perlen_list) > 0
@@ -319,12 +315,15 @@ class CouplingManager:
                     date_tag=date_tag,
                     sp_start=sp_start,
                     sp_end=sp_end,
-                    prev_date=None,
+                    prev_date=prev_state_tag,
                     first=(sp_index == 0),
                 )
                 ok = self.vic.run(sp_param)
                 if not ok:
                     raise RuntimeError("vic failed")
+
+                # carry over vic state into next stress period
+                prev_state_tag = state_tag
 
                 baseflow = self.vic.read_vic_wb(wbal_tag)  # mm per timestep (daily)
                 bf_mm_day = self._period_mean_mm_day(baseflow, expected_days=ndays)
@@ -332,7 +331,7 @@ class CouplingManager:
                 # compute mf6 recharge array in model length/day
                 recharge = self.compute_recharge_array(bf_mm_day) * self.recharge_scale
 
-                # optional clipping in mm/day space (before mm→model conversion)
+                # optional clipping in mm/day space
                 if self.recharge_min_mm_day is not None or self.recharge_max_mm_day is not None:
                     r_mm_day = recharge / self.mm_to_model
                     if self.recharge_min_mm_day is not None:
@@ -431,4 +430,3 @@ class CouplingManager:
             # convert ft to m for volume
             r = r * 0.3048
         return float(np.nansum(r * areas) * float(ndays))
-
