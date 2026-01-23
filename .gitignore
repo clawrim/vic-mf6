@@ -1,3 +1,4 @@
 run_*.py
 __pycache__/
 *.pyc
+src/exchange_data/coupling_log.csv
