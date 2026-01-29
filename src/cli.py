@@ -14,7 +14,7 @@
 #   Department of Civil Engineering, New Mexico State University
 ###############################################################################
 """
-This module provides the entrypoint to load config and run the monthly VIC–MF6
+This module provides the entrypoint to load config and run the VIC–MF6
 coupling workflow.
 """
 
@@ -25,32 +25,16 @@ import logging
 import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
-
-# allow both:
-#   python -m ems.cli -c config.yaml
-#   (when src is on PYTHONPATH or package is installed)
-
-#   python src/ems/cli.py -c config.yaml
-#   (directscript run from repo root)
-try:
-    from .mf6 import MF6Model
-    from .vic import VICModel
-    from .coupling import CouplingManager
-except Exception:
-    ROOT = Path(__file__).resolve().parent
-    PARENT = ROOT.parent
-    if str(PARENT) not in sys.path:
-        sys.path.insert(0, str(PARENT))
-    from ems.mf6 import MF6Model  # type: ignore
-    from ems.vic import VICModel  # type: ignore
-    from ems.coupling import CouplingManager  # type: ignore
+# use absolute imports so this works when running cli.py directly
+from mf6 import MF6Model
+from vic import VICModel
+from coupling import CouplingManager
+from config import load_config, ConfigError
 
 
 def _setup_logger() -> logging.Logger:
-    """Console logger with simple formatting."""
-    log = logging.getLogger("ems")
+    log = logging.getLogger("vicmf6")
     if not log.handlers:
         log.setLevel(logging.INFO)
         h = logging.StreamHandler(sys.stdout)
@@ -60,26 +44,21 @@ def _setup_logger() -> logging.Logger:
     return log
 
 
-def _load_yaml(path: str) -> dict:
-    """Read a minimal YAML without adding a dependency."""
-    import yaml
-
-    p = Path(path).expanduser()
-    with p.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
 def main(argv: list[str] | None = None) -> int:
-    """Parse config and orchestrate the VIC–MF6 coupling."""
-    parser = argparse.ArgumentParser(prog="ems", description="vic–mf6 coupling")
+    """parse config and orchestrate the vic–mf6 coupling."""
+    parser = argparse.ArgumentParser(
+        prog="vicmf6",
+        description="vic–mf6 coupling",
+    )
     parser.add_argument("-c", "--config", required=True, help="path to config.yaml")
     ns = parser.parse_args(argv)
 
     log = _setup_logger()
 
+    # load and validate config
     try:
-        cfg = _load_yaml(ns.config)
-    except Exception as e:
+        cfg = load_config(ns.config)
+    except ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
 
@@ -91,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         print("config missing required sections: mf6, vic, coupling", file=sys.stderr)
         return 2
 
+    # mf6
     try:
         mf6 = MF6Model(
             workspace=mf6_cfg["workspace"],
@@ -99,12 +79,14 @@ def main(argv: list[str] | None = None) -> int:
             start_date=datetime.fromisoformat(
                 str(mf6_cfg.get("start_date", "1940-03-01"))
             ),
+            length_units=str(mf6_cfg.get("length_units", "meters")),
         )
         mf6.initialize()
     except Exception as e:
         log.error(f"mf6 init failed: {e}")
         return 1
 
+    # vic
     vic = VICModel(
         vic_dir=vic_cfg["dir"],
         vic_exe=vic_cfg["exe"],
@@ -112,12 +94,15 @@ def main(argv: list[str] | None = None) -> int:
         outputs_dir=vic_cfg["outputs_dir"],
         exchange_dir=vic_cfg["exchange_dir"],
         params_file=vic_cfg["params_file"],
+        wbal_var=str(vic_cfg["wbal_var"]),
+        init_moist_layer=int(vic_cfg["init_moist_layer"]),
         logger=log,
     )
 
     os.makedirs(vic_cfg["exchange_dir"], exist_ok=True)
     log_file = os.path.join(vic_cfg["exchange_dir"], "coupling_log.csv")
 
+    # coupler
     cm = CouplingManager(
         mf6_model=mf6,
         vic_model=vic,
@@ -125,12 +110,15 @@ def main(argv: list[str] | None = None) -> int:
         params_file=vic_cfg["params_file"],
         log_file=log_file,
         logger=log,
-        vic_grid_shape=tuple(coup_cfg["vic_grid_shape"]),
-        model_name=mf6_cfg["model_name"],
     )
 
     try:
         cm.initialize()
+
+        # optional recharge sanity controls
+        cm.recharge_scale = float(coup_cfg.get("recharge_scale", 1.0))
+        cm.recharge_min_mm_day = coup_cfg.get("recharge_min_mm_day", None)
+        cm.recharge_max_mm_day = coup_cfg.get("recharge_max_mm_day", None)
     except Exception as e:
         log.error(f"coupling initialize failed: {e}")
         try:
@@ -161,5 +149,5 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     sys.exit(main())

@@ -1,23 +1,23 @@
 mf6:
-  workspace: "../../../MF6/rgtihm/model_2100"
+  workspace: "../../MF6/nm/mfnm"
   dll: "~/usr/local/src/modflow6/bin/libmf6.so"
-  start_date: "1940-03-01"
-  model_name: "rgtihm_2100"
+  start_date: "1990-01-01"
+  model_name: "mfnm"
 
 vic:
-  dir: "../nm_image/"
+  dir: "../../VIC"                # VIC top-level dir
   exe: "~/usr/local/src/VIC/vic/drivers/image/vic_image.exe"
-  global_param: "../nm_image/global_param_nc4.txt"
-  outputs_dir: "../nm_image/outputs"
-  exchange_dir: "../nm_image/exchange_data"
-  params_file: "../nm_image/nc4_params.nc"
+  global_param: "global_param_nc4.txt"   # relative to vic.dir
+  outputs_dir: "outputs"                 # relative to vic.dir
+  exchange_dir: "exchange_data"          # relative to vic.dir (or wherever you want)
+  params_file: "nc4_params.nc"           # relative to vic.dir
   wbal_var: "OUT_BASEFLOW"
   init_moist_layer: 2
 
 coupling:
-  table_csv: "../nm_image/exchange_data/mf6_vic_join_new.csv"
+  table_csv: "../vic_mf6_exchange_rch.csv"
   start_date: "1990-01-01"
-  end_date: "2100-12-31"
+  end_date: "1990-12-31"
   vic_grid_shape: [227, 212]
 
 logging:

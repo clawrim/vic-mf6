@@ -20,13 +20,14 @@ water-balance/state outputs.
 
 from __future__ import annotations
 
-import os
 import glob
+import os
 import shutil
 import subprocess
 from datetime import datetime
 from typing import Optional
 
+import numpy as np
 from netCDF4 import Dataset
 
 
@@ -39,15 +40,25 @@ class VICModel:
         outputs_dir: str,
         exchange_dir: str,
         params_file: str,
+        wbal_var: str,
+        init_moist_layer: int,
         logger,
     ) -> None:
         """Wrap the VIC image driver and related file paths."""
-        self.vic_dir = os.path.expanduser(vic_dir)
+        # normalize vic_dir and resolve paths relative to it
+        self.vic_dir = os.path.abspath(os.path.expanduser(vic_dir))
         self.vic_exe = os.path.expanduser(vic_exe)
-        self.global_param = os.path.expanduser(global_param)
-        self.outputs_dir = os.path.expanduser(outputs_dir)
-        self.exchange_dir = os.path.expanduser(exchange_dir)
-        self.params_file = os.path.expanduser(params_file)
+        def _resolve(p: str) -> str:
+            p = os.path.expanduser(p)
+            if os.path.isabs(p):
+                return p
+            return os.path.join(self.vic_dir, p)
+        self.global_param = _resolve(global_param)
+        self.outputs_dir = _resolve(outputs_dir)
+        self.exchange_dir = _resolve(exchange_dir)
+        self.params_file = _resolve(params_file)
+        self.wbal_var = wbal_var
+        self.init_moist_layer = init_moist_layer
         self.state_file_prefix: Optional[str] = None
         self.wb_file_prefix: Optional[str] = None
         self.logger = logger
@@ -183,36 +194,82 @@ class VICModel:
             else:
                 self.logger.error(f"Missing wbal: {wbal_path}")
 
-    def read_vic_wb(self, wbal_date_tag: str):
-        """Read OUT_BASEFLOW (mm) from wbal.<YYYY-MM-DD>.nc under outputs."""
-        wbal_fn = (
-            f"{self.wb_file_prefix}.{wbal_date_tag}.nc" if self.wb_file_prefix else None
+    def read_vic_wb(self, date_tag: str) -> Optional[np.ndarray]:
+        """
+        read water-balance variable (e.g., baseflow) from
+        <wb_file_prefix>.<YYYY-MM-DD>.nc under outputs_dir, using self.wbal_var
+        """
+        if not self.wb_file_prefix:
+            self.logger.error("wb_file_prefix is not set; did update_global_param run?")
+            return None
+
+        wb_path = os.path.join(
+            self.outputs_dir,
+            f"{self.wb_file_prefix}.{date_tag}.nc",
         )
-        if not wbal_fn:
-            self.logger.error("wbal prefix not set")
-            return None
-        wbal_file = os.path.join(self.outputs_dir, wbal_fn)
-        self.logger.info(f"reading wbal: {wbal_file}")
+
+        ds: Optional[Dataset] = None
         try:
-            if not os.path.exists(wbal_file):
-                self.logger.warning(f"wbal file not found: {wbal_file}")
+            if not os.path.exists(wb_path):
+                self.logger.error(f"vic wbal file not found: {wb_path}")
                 return None
-            ds = Dataset(wbal_file, "r")
-            if "OUT_BASEFLOW" not in ds.variables:
-                self.logger.warning("OUT_BASEFLOW not found")
-                ds.close()
+
+            self.logger.info(f"reading vic wbal file: {wb_path}")
+
+            ds = Dataset(wb_path, "r")
+            if self.wbal_var not in ds.variables:
+                self.logger.error(f"{self.wbal_var} not found in {wb_path}")
                 return None
-            baseflow = ds.variables["OUT_BASEFLOW"][:]
-            ds.close()
+
+            var = ds.variables[self.wbal_var]
+            raw = var[:]
+
+            # start from masked array if present
+            if np.ma.isMaskedArray(raw):
+                arr = raw.filled(np.nan)
+            else:
+                arr = np.array(raw, dtype=float)
+
+            # treat _FillValue / missing_value as nan explicitly
+            fill_vals: list[float] = []
+            for attr in ("_FillValue", "missing_value"):
+                if hasattr(var, attr):
+                    try:
+                        fill_vals.append(float(getattr(var, attr)))
+                    except Exception:
+                        pass
+
+            if fill_vals:
+                mask = np.zeros_like(arr, dtype=bool)
+                for fv in fill_vals:
+                    mask |= arr == fv
+                arr = np.where(mask, np.nan, arr)
+
+            # squeeze possible time dimension: expect (lat, lon) finally
+            if arr.ndim == 3 and arr.shape[0] == 1:
+                arr = arr[0, :, :]
+            elif arr.ndim != 2:
+                self.logger.error(
+                    f"{self.wbal_var} has unexpected shape {arr.shape} in {wb_path}"
+                )
+                return None
+
             try:
-                self.logger.info(f"OUT_BASEFLOW mean: {baseflow.mean():.6f} mm")
+                mean_val = float(np.nanmean(arr))
+                min_val = float(np.nanmin(arr))
+                max_val = float(np.nanmax(arr))
+                self.logger.info(
+                    f"{self.wbal_var} stats (mm): mean={mean_val:.6f}, "
+                    f"min={min_val:.6f}, max={max_val:.6f}"
+                )
             except Exception:
+                # don't crash just for logging
                 pass
-            return baseflow
+
+            return arr
         except Exception as e:
-            self.logger.error(f"read_vic_wb failed: {e}")
-            try:
-                ds.close()
-            except Exception:
-                pass
+            self.logger.error(f"read_vic_wb failed for {wb_path}: {e}")
             return None
+        finally:
+            if ds is not None:
+                ds.close()
