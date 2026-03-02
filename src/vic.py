@@ -25,10 +25,11 @@ import os
 import shutil
 import subprocess
 from datetime import datetime
+from datetime import timedelta
 from typing import Optional
-
 import numpy as np
 from netCDF4 import Dataset
+import re
 
 
 class VICModel:
@@ -194,19 +195,109 @@ class VICModel:
             else:
                 self.logger.error(f"Missing wbal: {wbal_path}")
 
+#    def read_vic_wb(self, date_tag: str) -> Optional[np.ndarray]:
+#        """
+#        read water-balance variable (e.g., baseflow) from
+#        <wb_file_prefix>.<YYYY-MM-DD>.nc under outputs_dir, using self.wbal_var
+#        """
+#        if not self.wb_file_prefix:
+#            self.logger.error("wb_file_prefix is not set; did update_global_param run?")
+#            return None
+#
+#        wb_path = os.path.join(
+#            self.outputs_dir,
+#            f"{self.wb_file_prefix}.{date_tag}.nc",
+#        )
+#
+#        ds: Optional[Dataset] = None
+#        try:
+#            if not os.path.exists(wb_path):
+#                self.logger.error(f"vic wbal file not found: {wb_path}")
+#                return None
+#
+#            self.logger.info(f"reading vic wbal file: {wb_path}")
+#
+#            ds = Dataset(wb_path, "r")
+#            if self.wbal_var not in ds.variables:
+#                self.logger.error(f"{self.wbal_var} not found in {wb_path}")
+#                return None
+#
+#            var = ds.variables[self.wbal_var]
+#            raw = var[:]
+#
+#            # start from masked array if present
+#            if np.ma.isMaskedArray(raw):
+#                arr = raw.filled(np.nan)
+#            else:
+#                arr = np.array(raw, dtype=float)
+#
+#            # treat _FillValue / missing_value as nan explicitly
+#            fill_vals: list[float] = []
+#            for attr in ("_FillValue", "missing_value"):
+#                if hasattr(var, attr):
+#                    try:
+#                        fill_vals.append(float(getattr(var, attr)))
+#                    except Exception:
+#                        pass
+#
+#            if fill_vals:
+#                mask = np.zeros_like(arr, dtype=bool)
+#                for fv in fill_vals:
+#                    mask |= arr == fv
+#                arr = np.where(mask, np.nan, arr)
+#
+#            # squeeze possible time dimension: expect (lat, lon) finally
+#            # changed it to
+#                        # accept:
+#            #   (lat, lon)
+#            #   (time, lat, lon)
+#            if arr.ndim == 3:
+#                return arr  # keep time dimension
+#            if arr.ndim == 2:
+#                return arr
+#
+#            self.logger.error(
+#                f"{self.wbal_var} has unexpected shape {arr.shape} in {wb_path}"
+#            )
+#            return None
+##            if arr.ndim == 3 and arr.shape[0] == 1:
+##                arr = arr[0, :, :]
+##            elif arr.ndim != 2:
+##                self.logger.error(
+##                    f"{self.wbal_var} has unexpected shape {arr.shape} in {wb_path}"
+##                )
+##                return None
+##
+#            try:
+#                mean_val = float(np.nanmean(arr))
+#                min_val = float(np.nanmin(arr))
+#                max_val = float(np.nanmax(arr))
+#                self.logger.info(
+#                    f"{self.wbal_var} stats (mm): mean={mean_val:.6f}, "
+#                    f"min={min_val:.6f}, max={max_val:.6f}"
+#                )
+#            except Exception:
+#                # don't crash just for logging
+#                pass
+#
+#            return arr
+#        except Exception as e:
+#            self.logger.error(f"read_vic_wb failed for {wb_path}: {e}")
+#            return None
+#        finally:
+#            if ds is not None:
+#                ds.close()
+    def _wbal_path_for_date(self, d: datetime) -> str:
+        return os.path.join(
+            self.outputs_dir, f"{self.wb_file_prefix}.{d.strftime('%Y-%m-%d')}.nc"
+        )
+
     def read_vic_wb(self, date_tag: str) -> Optional[np.ndarray]:
-        """
-        read water-balance variable (e.g., baseflow) from
-        <wb_file_prefix>.<YYYY-MM-DD>.nc under outputs_dir, using self.wbal_var
-        """
         if not self.wb_file_prefix:
             self.logger.error("wb_file_prefix is not set; did update_global_param run?")
             return None
 
-        wb_path = os.path.join(
-            self.outputs_dir,
-            f"{self.wb_file_prefix}.{date_tag}.nc",
-        )
+        wb_path = os.path.join(self.outputs_dir, f"{self.wb_file_prefix}.{date_tag}.nc")
 
         ds: Optional[Dataset] = None
         try:
@@ -224,13 +315,11 @@ class VICModel:
             var = ds.variables[self.wbal_var]
             raw = var[:]
 
-            # start from masked array if present
             if np.ma.isMaskedArray(raw):
                 arr = raw.filled(np.nan)
             else:
                 arr = np.array(raw, dtype=float)
 
-            # treat _FillValue / missing_value as nan explicitly
             fill_vals: list[float] = []
             for attr in ("_FillValue", "missing_value"):
                 if hasattr(var, attr):
@@ -242,34 +331,120 @@ class VICModel:
             if fill_vals:
                 mask = np.zeros_like(arr, dtype=bool)
                 for fv in fill_vals:
-                    mask |= arr == fv
+                    mask |= (arr == fv)
                 arr = np.where(mask, np.nan, arr)
 
-            # squeeze possible time dimension: expect (lat, lon) finally
-            if arr.ndim == 3 and arr.shape[0] == 1:
-                arr = arr[0, :, :]
-            elif arr.ndim != 2:
+            # compute stats on a 2d representation
+            a2 = arr
+            if arr.ndim == 3:
+                a2 = np.nanmean(arr, axis=0)
+
+            if a2.ndim != 2:
                 self.logger.error(
                     f"{self.wbal_var} has unexpected shape {arr.shape} in {wb_path}"
                 )
                 return None
 
             try:
-                mean_val = float(np.nanmean(arr))
-                min_val = float(np.nanmin(arr))
-                max_val = float(np.nanmax(arr))
+                mean_val = float(np.nanmean(a2))
+                min_val = float(np.nanmin(a2))
+                max_val = float(np.nanmax(a2))
                 self.logger.info(
                     f"{self.wbal_var} stats (mm): mean={mean_val:.6f}, "
                     f"min={min_val:.6f}, max={max_val:.6f}"
                 )
             except Exception:
-                # don't crash just for logging
                 pass
 
             return arr
+
         except Exception as e:
             self.logger.error(f"read_vic_wb failed for {wb_path}: {e}")
             return None
         finally:
             if ds is not None:
                 ds.close()
+
+    def read_vic_wb_near(self, d: datetime) -> Optional[np.ndarray]:
+        # try exact date, then -1, then +1
+        for shift in (0, -1, 1):
+            dd = d + timedelta(days=shift)
+            p = self._wbal_path_for_date(dd)
+            if os.path.exists(p):
+                if shift != 0:
+                    self.logger.info(
+                        f"wbal date shift used: target={d.date()} read={dd.date()} shift={shift}"
+                    )
+                return self.read_vic_wb(dd.strftime("%Y-%m-%d"))
+
+        self.logger.error(f"no wbal file found near {d.date()} (tried 0,-1,+1)")
+        return None
+
+    def read_vic_wb_period(
+        self, sp_start: datetime, sp_end: datetime
+    ) -> Optional[np.ndarray]:
+        arrs: list[np.ndarray] = []
+        d = sp_start
+        while d <= sp_end:
+            a = self.read_vic_wb_near(d)
+            if a is None:
+                return None
+
+            a = np.asarray(a, dtype=float)
+
+            if a.ndim == 3:
+                # if a single file already contains multiple timesteps, return it directly
+                if a.shape[0] > 1:
+                    return a
+                # collapse (1,lat,lon) -> (lat,lon) for stacking days
+                a = a[0]
+
+            if a.ndim != 2:
+                self.logger.error(f"unexpected wbal shape after normalization: {a.shape}")
+                return None
+
+            arrs.append(a)
+            d += timedelta(days=1)
+
+        return np.stack(arrs, axis=0)
+
+    def latest_state_tag(self) -> Optional[str]:
+        if not self.state_file_prefix:
+            return None
+
+        # state_file_prefix may be like "outputs/state"
+        pat = os.path.join(self.vic_dir, f"{self.state_file_prefix}.*_00000.nc")
+        files = glob.glob(pat)
+        if not files:
+            self.logger.error(f"no state files found with pattern: {pat}")
+            return None
+
+        latest = max(files, key=os.path.getmtime)
+        m = re.search(r"\.(\d{8})_00000\.nc$", os.path.basename(latest))
+        if not m:
+            self.logger.error(f"cannot parse state tag from: {latest}")
+            return None
+
+        tag = m.group(1)
+        self.logger.info(f"latest state tag detected: {tag} from {latest}")
+        return tag
+
+    def read_vic_wb_period(self, sp_start: datetime, sp_end: datetime) -> Optional[np.ndarray]:
+        arrs = []
+        d = sp_start
+        while d <= sp_end:
+            tag = d.strftime("%Y-%m-%d")
+            a = self.read_vic_wb(tag)
+            if a is None:
+                return None
+            a = np.asarray(a, dtype=float)
+            if a.ndim == 3:
+                # if it's (time,lat,lon) for a single-day file, collapse to (lat,lon) before stacking days
+                if a.shape[0] == 1:
+                    a = a[0]
+                else:
+                    # already a multi-day series; just return it
+                    return a
+            arrs.append(a)
+            d += timedelta(days=1)
+        return np.stack(arrs, axis=0)  # (ndays, lat, lon)
