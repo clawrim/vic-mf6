@@ -318,22 +318,6 @@ class CouplingManager:
                     prev_date=prev_state_tag,
                     first=(sp_index == 0),
                 )
-#                ok = self.vic.run(sp_param)
-                #ok = self.vic.move_files(state_date_tag=state_tag, wbal_date_tag=wbal_tag)
-#                if not ok:
-#                    raise RuntimeError("vic failed")
-#
-                # carry over vic state into next stress period
-#                prev_state_tag = state_tag
-#
-                #baseflow = self.vic.read_vic_wb(wbal_tag)  # mm per timestep (daily)
-                #bf_mm_day = self._period_mean_mm_day(baseflow, expected_days=ndays)
-#                if ndays == 1:
-#                    baseflow = self.vic.read_vic_wb(wbal_tag)
-#                else:
-#                    baseflow = self.vic.read_vic_wb_period(sp_start, sp_end)
-#
-#                bf_mm_day = self._period_mean_mm_day(baseflow, expected_days=ndays)
                 ok = self.vic.run(sp_param)
                 if not ok:
                     raise RuntimeError("vic failed")
