@@ -322,10 +322,20 @@ class CouplingManager:
                 if not ok:
                     raise RuntimeError("vic failed")
 
-                # carry over vic state into next stress period
-                prev_state_tag = state_tag
+                # carry over vic state into next stress period by detecting newest state
+                prev_state_tag = self.vic.latest_state_tag()
+                if prev_state_tag is None:
+                    raise RuntimeError("could not detect latest vic state tag after run")
 
-                baseflow = self.vic.read_vic_wb(wbal_tag)  # mm per timestep (daily)
+                # read baseflow over the full stress period window
+                if ndays == 1:
+                    baseflow = self.vic.read_vic_wb_near(sp_start)
+                else:
+                    baseflow = self.vic.read_vic_wb_period(sp_start, sp_end)
+
+                if baseflow is None:
+                    raise RuntimeError("failed to read vic baseflow for stress period")
+
                 bf_mm_day = self._period_mean_mm_day(baseflow, expected_days=ndays)
 
                 # compute mf6 recharge array in model length/day
