@@ -336,23 +336,3 @@ class VICModel:
         tag = m.group(1)
         self.logger.info(f"latest state tag detected: {tag} from {latest}")
         return tag
-
-    def read_vic_wb_period(self, sp_start: datetime, sp_end: datetime) -> Optional[np.ndarray]:
-        arrs = []
-        d = sp_start
-        while d <= sp_end:
-            tag = d.strftime("%Y-%m-%d")
-            a = self.read_vic_wb(tag)
-            if a is None:
-                return None
-            a = np.asarray(a, dtype=float)
-            if a.ndim == 3:
-                # if it's (time,lat,lon) for a single-day file, collapse to (lat,lon) before stacking days
-                if a.shape[0] == 1:
-                    a = a[0]
-                else:
-                    # already a multi-day series; just return it
-                    return a
-            arrs.append(a)
-            d += timedelta(days=1)
-        return np.stack(arrs, axis=0)  # (ndays, lat, lon)
