@@ -16,7 +16,7 @@
 # Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
-i
+
 from __future__ import annotations
 
 """public exports for the final vic-mf6 coupling package."""
