@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -97,7 +97,9 @@ class ApplicationConfig:
 Modflow6RuntimeConfig = MF6RuntimeConfig
 
 
-def _application_config_modflow6_property(self: "ApplicationConfig") -> MF6RuntimeConfig:
+def _application_config_modflow6_property(
+    self: "ApplicationConfig",
+) -> MF6RuntimeConfig:
     """compatibility view for older code that still expects config.modflow6."""
 
     return self.mf6
@@ -158,17 +160,26 @@ def load_application_config(config_path: str | Path) -> ApplicationConfig:
     config_directory = config_file.parent
 
     mf6_config = MF6RuntimeConfig(
-        workspace=_resolve_config_path(config_directory, raw_config["mf6"]["workspace"]),
+        workspace=_resolve_config_path(
+            config_directory, raw_config["mf6"]["workspace"]
+        ),
         dll=_resolve_config_path(config_directory, raw_config["mf6"]["dll"]),
-        start_date=_parse_datetime(raw_config["mf6"]["start_date"], field_name="mf6.start_date"),
-        length_units=str(raw_config["mf6"].get("length_units", "meters")).strip() or "meters",
+        start_date=_parse_datetime(
+            raw_config["mf6"]["start_date"], field_name="mf6.start_date"
+        ),
+        length_units=str(raw_config["mf6"].get("length_units", "meters")).strip()
+        or "meters",
     )
 
-    vic_working_directory = _resolve_config_path(config_directory, raw_config["vic"]["dir"])
+    vic_working_directory = _resolve_config_path(
+        config_directory, raw_config["vic"]["dir"]
+    )
 
     vic_config = VicImageDriverConfig(
         working_directory=vic_working_directory,
-        executable_path=_resolve_config_path(config_directory, raw_config["vic"]["exe"]),
+        executable_path=_resolve_config_path(
+            config_directory, raw_config["vic"]["exe"]
+        ),
         global_parameter_template=_resolve_path_relative_to_base_directory(
             vic_working_directory,
             raw_config["vic"]["global_param"],
@@ -190,7 +201,9 @@ def load_application_config(config_path: str | Path) -> ApplicationConfig:
             field_name="vic.params_file",
         ),
         water_balance_variable=str(raw_config["vic"]["wbal_var"]).strip(),
-        initial_moisture_layer_index=_parse_int(raw_config["vic"]["init_moist_layer"], field_name="vic.init_moist_layer"),
+        initial_moisture_layer_index=_parse_int(
+            raw_config["vic"]["init_moist_layer"], field_name="vic.init_moist_layer"
+        ),
         spawn_timeout_seconds=_parse_positive_int(
             raw_config["vic"].get("spawn_timeout_seconds", 3600),
             field_name="vic.spawn_timeout_seconds",
@@ -198,11 +211,23 @@ def load_application_config(config_path: str | Path) -> ApplicationConfig:
     )
 
     coupling_config = CouplingConfig(
-        coupling_table_csv=_resolve_config_path(config_directory, raw_config["coupling"]["table_csv"]),
-        start_date=_parse_datetime(raw_config["coupling"]["start_date"], field_name="coupling.start_date"),
-        end_date=_parse_datetime(raw_config["coupling"]["end_date"], field_name="coupling.end_date"),
-        recharge_scale=_parse_float(raw_config["coupling"].get("recharge_scale", 1.0), field_name="coupling.recharge_scale"),
-        vic_grid_shape=_parse_optional_shape(raw_config["coupling"].get("vic_grid_shape"), field_name="coupling.vic_grid_shape"),
+        coupling_table_csv=_resolve_config_path(
+            config_directory, raw_config["coupling"]["table_csv"]
+        ),
+        start_date=_parse_datetime(
+            raw_config["coupling"]["start_date"], field_name="coupling.start_date"
+        ),
+        end_date=_parse_datetime(
+            raw_config["coupling"]["end_date"], field_name="coupling.end_date"
+        ),
+        recharge_scale=_parse_float(
+            raw_config["coupling"].get("recharge_scale", 1.0),
+            field_name="coupling.recharge_scale",
+        ),
+        vic_grid_shape=_parse_optional_shape(
+            raw_config["coupling"].get("vic_grid_shape"),
+            field_name="coupling.vic_grid_shape",
+        ),
     )
 
     if coupling_config.end_date < coupling_config.start_date:
@@ -265,15 +290,21 @@ def _validate_required_sections(raw_config: dict[str, Any]) -> None:
         if section_name not in raw_config:
             raise ConfigurationError(f"missing configuration section: {section_name}")
         if not isinstance(raw_config[section_name], dict):
-            raise ConfigurationError(f"configuration section must be a mapping: {section_name}")
-
+            raise ConfigurationError(
+                f"configuration section must be a mapping: {section_name}"
+            )
 
 
 def _validate_required_keys(raw_config: dict[str, Any]) -> None:
-    _validate_required_section_keys(raw_config["mf6"], _REQUIRED_MF6_KEYS, section_name="mf6")
-    _validate_required_section_keys(raw_config["vic"], _REQUIRED_VIC_KEYS, section_name="vic")
-    _validate_required_section_keys(raw_config["coupling"], _REQUIRED_COUPLING_KEYS, section_name="coupling")
-
+    _validate_required_section_keys(
+        raw_config["mf6"], _REQUIRED_MF6_KEYS, section_name="mf6"
+    )
+    _validate_required_section_keys(
+        raw_config["vic"], _REQUIRED_VIC_KEYS, section_name="vic"
+    )
+    _validate_required_section_keys(
+        raw_config["coupling"], _REQUIRED_COUPLING_KEYS, section_name="coupling"
+    )
 
 
 def _validate_required_section_keys(
@@ -284,20 +315,22 @@ def _validate_required_section_keys(
 ) -> None:
     for key_name in required_keys:
         if key_name not in section_values:
-            raise ConfigurationError(f"missing configuration value: {section_name}.{key_name}")
-
+            raise ConfigurationError(
+                f"missing configuration value: {section_name}.{key_name}"
+            )
 
 
 def _resolve_config_path(config_directory: Path, raw_value: Any) -> str:
     if not isinstance(raw_value, str):
-        raise ConfigurationError(f"expected a path string, got {type(raw_value).__name__}")
+        raise ConfigurationError(
+            f"expected a path string, got {type(raw_value).__name__}"
+        )
 
     candidate = Path(raw_value).expanduser()
     if not candidate.is_absolute():
         candidate = config_directory / candidate
 
     return str(candidate.resolve())
-
 
 
 def _resolve_path_relative_to_base_directory(
@@ -325,7 +358,6 @@ def _resolve_path_relative_to_base_directory(
     return str((Path(base_directory) / candidate).resolve())
 
 
-
 def _parse_datetime(raw_value: Any, *, field_name: str) -> datetime:
     if not isinstance(raw_value, str):
         raise ConfigurationError(f"{field_name} must be an iso date or datetime string")
@@ -333,8 +365,9 @@ def _parse_datetime(raw_value: Any, *, field_name: str) -> datetime:
     try:
         return datetime.fromisoformat(raw_value)
     except ValueError as exc:
-        raise ConfigurationError(f"{field_name} is not a valid iso date or datetime string") from exc
-
+        raise ConfigurationError(
+            f"{field_name} is not a valid iso date or datetime string"
+        ) from exc
 
 
 def _parse_int(raw_value: Any, *, field_name: str) -> int:
@@ -344,7 +377,6 @@ def _parse_int(raw_value: Any, *, field_name: str) -> int:
         raise ConfigurationError(f"{field_name} must be an integer") from exc
 
 
-
 def _parse_positive_int(raw_value: Any, *, field_name: str) -> int:
     value = _parse_int(raw_value, field_name=field_name)
     if value <= 0:
@@ -352,13 +384,11 @@ def _parse_positive_int(raw_value: Any, *, field_name: str) -> int:
     return value
 
 
-
 def _parse_float(raw_value: Any, *, field_name: str) -> float:
     try:
         return float(raw_value)
     except Exception as exc:
         raise ConfigurationError(f"{field_name} must be numeric") from exc
-
 
 
 def _parse_optional_shape(raw_value: Any, *, field_name: str) -> tuple[int, int] | None:

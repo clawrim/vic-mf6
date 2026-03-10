@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 i
@@ -33,7 +33,11 @@ from .application_config import (
     load_config,
 )
 from .mf6_bmi_model import MF6BmiModel, MF6Model, Modflow6BmiModel
-from .mf6_bmi_parallel_model import MF6ParallelModel, ParallelMF6BmiModel, ParallelModflow6BmiModel
+from .mf6_bmi_parallel_model import (
+    MF6ParallelModel,
+    ParallelMF6BmiModel,
+    ParallelModflow6BmiModel,
+)
 from .mf6_namefile_utils import (
     MF6NamefileError,
     ModflowNamefileError,

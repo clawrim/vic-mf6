@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -42,8 +42,7 @@ from mpi4py import MPI
 
 
 class LoggerLike(Protocol):
-    def info(self, message: str) -> None:
-        ...
+    def info(self, message: str) -> None: ...
 
 
 class VicMpiSpawnError(RuntimeError):
@@ -61,7 +60,6 @@ class VicMpiSpawnRequest:
     omp_thread_count: int = 1
     preload_library_path: str | None = None
     timeout_seconds: int = 3600
-
 
 
 def run_vic_image_driver_with_mpi_spawn(
@@ -103,7 +101,6 @@ VicSpawnConfig = VicMpiSpawnRequest
 run_vic_spawn = run_vic_image_driver_with_mpi_spawn
 
 
-
 def _validate_spawn_request(request: VicMpiSpawnRequest) -> VicMpiSpawnRequest:
     if request.mpi_process_count < 1:
         raise VicMpiSpawnError(
@@ -127,11 +124,17 @@ def _validate_spawn_request(request: VicMpiSpawnRequest) -> VicMpiSpawnRequest:
     if not executable_path.is_file():
         raise VicMpiSpawnError(f"vic executable path is not a file: {executable_path}")
     if not working_directory.exists():
-        raise FileNotFoundError(f"vic working directory was not found: {working_directory}")
+        raise FileNotFoundError(
+            f"vic working directory was not found: {working_directory}"
+        )
     if not working_directory.is_dir():
-        raise VicMpiSpawnError(f"vic working directory is not a directory: {working_directory}")
+        raise VicMpiSpawnError(
+            f"vic working directory is not a directory: {working_directory}"
+        )
     if not global_parameter_path.exists():
-        raise FileNotFoundError(f"vic global parameter file was not found: {global_parameter_path}")
+        raise FileNotFoundError(
+            f"vic global parameter file was not found: {global_parameter_path}"
+        )
     if not global_parameter_path.is_file():
         raise VicMpiSpawnError(
             f"vic global parameter path is not a file: {global_parameter_path}"
@@ -141,9 +144,13 @@ def _validate_spawn_request(request: VicMpiSpawnRequest) -> VicMpiSpawnRequest:
     if request.preload_library_path is not None:
         preload_candidate = Path(request.preload_library_path).expanduser().resolve()
         if not preload_candidate.exists():
-            raise FileNotFoundError(f"preload library was not found: {preload_candidate}")
+            raise FileNotFoundError(
+                f"preload library was not found: {preload_candidate}"
+            )
         if not preload_candidate.is_file():
-            raise VicMpiSpawnError(f"preload library path is not a file: {preload_candidate}")
+            raise VicMpiSpawnError(
+                f"preload library path is not a file: {preload_candidate}"
+            )
         preload_library_path = str(preload_candidate)
 
     return VicMpiSpawnRequest(
@@ -157,7 +164,6 @@ def _validate_spawn_request(request: VicMpiSpawnRequest) -> VicMpiSpawnRequest:
     )
 
 
-
 def _configure_local_thread_environment(omp_thread_count: int) -> None:
     thread_count = str(omp_thread_count)
 
@@ -169,7 +175,6 @@ def _configure_local_thread_environment(omp_thread_count: int) -> None:
     os.environ["OPENBLAS_NUM_THREADS"] = thread_count
     os.environ["MKL_NUM_THREADS"] = thread_count
     os.environ["NUMEXPR_NUM_THREADS"] = thread_count
-
 
 
 def _build_spawn_environment_lines(request: VicMpiSpawnRequest) -> str:
@@ -187,10 +192,11 @@ def _build_spawn_environment_lines(request: VicMpiSpawnRequest) -> str:
     return "\n".join(environment_lines)
 
 
-
 def _spawn_with_timeout(request: VicMpiSpawnRequest, info: MPI.Info) -> None:
     def _alarm_handler(signum: int, frame: object) -> None:
-        raise TimeoutError("timeout while waiting for vic to disconnect from the parent rank")
+        raise TimeoutError(
+            "timeout while waiting for vic to disconnect from the parent rank"
+        )
 
     previous_handler = signal.signal(signal.SIGALRM, _alarm_handler)
     signal.alarm(int(request.timeout_seconds))

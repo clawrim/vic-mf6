@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -62,14 +62,11 @@ class LoggerLike(Protocol):
     still documenting the methods that the caller must provide.
     """
 
-    def info(self, message: str) -> None:
-        ...
+    def info(self, message: str) -> None: ...
 
-    def warning(self, message: str) -> None:
-        ...
+    def warning(self, message: str) -> None: ...
 
-    def error(self, message: str) -> None:
-        ...
+    def error(self, message: str) -> None: ...
 
 
 VicGridIndex = tuple[int, int]
@@ -114,8 +111,12 @@ class VicToMf6RechargeMapper:
 
     coupling_table: Optional[pd.DataFrame] = field(default=None, init=False)
     vic_id_to_indices: Optional[VicIndexLookup] = field(default=None, init=False)
-    mf6_cell_to_contributions: Optional[Mf6ContributionLookup] = field(default=None, init=False)
-    millimeters_to_model_length: float = field(default=_MILLIMETERS_TO_METERS, init=False)
+    mf6_cell_to_contributions: Optional[Mf6ContributionLookup] = field(
+        default=None, init=False
+    )
+    millimeters_to_model_length: float = field(
+        default=_MILLIMETERS_TO_METERS, init=False
+    )
 
     def initialize(self) -> None:
         """validate inputs and build cached mapping structures.
@@ -132,9 +133,13 @@ class VicToMf6RechargeMapper:
         filtered_table = self._filter_rows_for_current_model(coupling_table)
         self._validate_mapping_table_columns(filtered_table)
 
-        self.millimeters_to_model_length = self._millimeters_to_model_length(self.mf6_length_units)
+        self.millimeters_to_model_length = self._millimeters_to_model_length(
+            self.mf6_length_units
+        )
         self.vic_id_to_indices = self._build_vic_index_lookup(filtered_table)
-        self.mf6_cell_to_contributions = self._build_mf6_contribution_lookup(filtered_table)
+        self.mf6_cell_to_contributions = self._build_mf6_contribution_lookup(
+            filtered_table
+        )
         self.coupling_table = filtered_table
 
         self.logger.info(
@@ -184,7 +189,12 @@ class VicToMf6RechargeMapper:
                     continue
 
                 vic_row, vic_col = vic_index
-                if vic_row < 0 or vic_col < 0 or vic_row >= vic_nrow or vic_col >= vic_ncol:
+                if (
+                    vic_row < 0
+                    or vic_col < 0
+                    or vic_row >= vic_nrow
+                    or vic_col >= vic_ncol
+                ):
                     skipped_contributions += 1
                     continue
 
@@ -282,7 +292,9 @@ class VicToMf6RechargeMapper:
 
         return coupling_table
 
-    def _filter_rows_for_current_model(self, coupling_table: pd.DataFrame) -> pd.DataFrame:
+    def _filter_rows_for_current_model(
+        self, coupling_table: pd.DataFrame
+    ) -> pd.DataFrame:
         """keep only rows that belong to the mf6 model handled by this rank.
 
         mpi note:
@@ -314,7 +326,9 @@ class VicToMf6RechargeMapper:
     def _find_model_column_name(self, coupling_table: pd.DataFrame) -> Optional[str]:
         """return the coupling-table column used to identify the mf6 model."""
 
-        normalized_columns = {column.casefold(): column for column in coupling_table.columns}
+        normalized_columns = {
+            column.casefold(): column for column in coupling_table.columns
+        }
         for candidate in _MODEL_COLUMN_CANDIDATES:
             column_name = normalized_columns.get(candidate.casefold())
             if column_name is not None:
@@ -404,8 +418,12 @@ class VicToMf6RechargeMapper:
         vic_index_lookup: VicIndexLookup = {}
         for row in coupling_table.itertuples(index=False):
             vic_id = self._coerce_int(getattr(row, "vic_id"), field_name="vic_id")
-            base_latitude = self._coerce_float(getattr(row, "b_lat"), field_name="b_lat")
-            base_longitude = self._coerce_float(getattr(row, "b_lon"), field_name="b_lon")
+            base_latitude = self._coerce_float(
+                getattr(row, "b_lat"), field_name="b_lat"
+            )
+            base_longitude = self._coerce_float(
+                getattr(row, "b_lon"), field_name="b_lon"
+            )
 
             vic_row = int(np.abs(vic_latitudes - base_latitude).argmin())
             vic_col = int(np.abs(vic_longitudes - base_longitude).argmin())
@@ -535,7 +553,9 @@ class VicToMf6RechargeMapper:
             if not np.isfinite(area_ratio) or area_ratio <= 0.0:
                 continue
 
-            contribution_lookup.setdefault((mf6_row, mf6_col), []).append((vic_id, area_ratio))
+            contribution_lookup.setdefault((mf6_row, mf6_col), []).append(
+                (vic_id, area_ratio)
+            )
 
         if not contribution_lookup:
             raise RechargeMappingError(
@@ -549,8 +569,7 @@ class VicToMf6RechargeMapper:
                 continue
 
             normalized_lookup[mf6_index] = [
-                (vic_id, area_ratio / ratio_sum)
-                for vic_id, area_ratio in contributions
+                (vic_id, area_ratio / ratio_sum) for vic_id, area_ratio in contributions
             ]
 
         if not normalized_lookup:
@@ -573,7 +592,9 @@ class VicToMf6RechargeMapper:
         """return the cached vic index lookup or fail fast."""
 
         if self.vic_id_to_indices is None:
-            raise RechargeMappingError("mapper is not initialized: vic index lookup is missing")
+            raise RechargeMappingError(
+                "mapper is not initialized: vic index lookup is missing"
+            )
         return self.vic_id_to_indices
 
     def _require_mf6_contribution_lookup(self) -> Mf6ContributionLookup:
@@ -628,10 +649,14 @@ class VicToMf6RechargeMapper:
         try:
             mf6_id_as_int = int(float(str(mf6_id_value).strip()))
         except Exception as exc:
-            raise RechargeMappingError(f"invalid mf6_id value: {mf6_id_value!r}") from exc
+            raise RechargeMappingError(
+                f"invalid mf6_id value: {mf6_id_value!r}"
+            ) from exc
 
         if mf6_id_as_int < 0:
-            raise RechargeMappingError(f"mf6_id must be non-negative, got {mf6_id_value!r}")
+            raise RechargeMappingError(
+                f"mf6_id must be non-negative, got {mf6_id_value!r}"
+            )
 
         encoded_id = f"{mf6_id_as_int:06d}"
         return int(encoded_id[:3]), int(encoded_id[3:])
@@ -718,4 +743,3 @@ class VicToMf6RechargeMapper:
 
 # compatibility alias kept inside the final module.
 RechargeMapper = VicToMf6RechargeMapper
-

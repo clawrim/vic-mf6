@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -42,14 +42,11 @@ import xmipy
 
 
 class LoggerLike(Protocol):
-    def info(self, message: str) -> None:
-        ...
+    def info(self, message: str) -> None: ...
 
-    def warning(self, message: str) -> None:
-        ...
+    def warning(self, message: str) -> None: ...
 
-    def error(self, message: str) -> None:
-        ...
+    def error(self, message: str) -> None: ...
 
 
 class MF6BmiError(RuntimeError):
@@ -186,7 +183,9 @@ class MF6BmiModel:
             self.logger.info("finished mf6 bmi time step")
             current_time = float(bmi.get_current_time())
 
-    def set_recharge(self, recharge_array: np.ndarray, *, inactive_to_zero: bool = True) -> None:
+    def set_recharge(
+        self, recharge_array: np.ndarray, *, inactive_to_zero: bool = True
+    ) -> None:
         """write a recharge array into the bmi input buffer.
 
         accepted shapes are either (nrow, ncol) or a flattened vector with
@@ -218,11 +217,15 @@ class MF6BmiModel:
                 )
             recharge_vector = recharge_values
         else:
-            raise MF6BmiError("recharge input must be one-dimensional or two-dimensional")
+            raise MF6BmiError(
+                "recharge input must be one-dimensional or two-dimensional"
+            )
 
         if inactive_to_zero:
             if self.idomain is None:
-                raise MF6BmiError("idomain is required when inactive_to_zero is enabled")
+                raise MF6BmiError(
+                    "idomain is required when inactive_to_zero is enabled"
+                )
             active_mask = self.idomain[0].reshape(nrow * ncol) > 0
             recharge_vector = np.where(active_mask, recharge_vector, 0.0)
 
@@ -281,10 +284,14 @@ class MF6BmiModel:
     def _resolve_bmi_prefix(self) -> str:
         bmi = self._require_bmi()
         candidates = sorted(
-            variable_name for variable_name in self.bmi_variable_names if variable_name.endswith("/DIS/NROW")
+            variable_name
+            for variable_name in self.bmi_variable_names
+            if variable_name.endswith("/DIS/NROW")
         )
         if not candidates:
-            raise MF6BmiError("failed to find a bmi prefix because no */DIS/NROW variable was exposed")
+            raise MF6BmiError(
+                "failed to find a bmi prefix because no */DIS/NROW variable was exposed"
+            )
 
         for candidate in candidates:
             try:
@@ -305,7 +312,9 @@ class MF6BmiModel:
         self.nlay = int(bmi.get_value_ptr(f"{prefix}/DIS/NLAY")[0])
 
         idomain_pointer = bmi.get_value_ptr(f"{prefix}/DIS/IDOMAIN")
-        self.idomain = np.asarray(idomain_pointer).reshape(self.nlay, self.nrow, self.ncol)
+        self.idomain = np.asarray(idomain_pointer).reshape(
+            self.nlay, self.nrow, self.ncol
+        )
         self.surface_active = self.idomain[0] > 0
 
         try:
@@ -320,10 +329,14 @@ class MF6BmiModel:
     def _load_tdis_metadata(self) -> None:
         bmi = self._require_bmi()
         nper_candidates = sorted(
-            variable_name for variable_name in self.bmi_variable_names if variable_name.endswith("/NPER")
+            variable_name
+            for variable_name in self.bmi_variable_names
+            if variable_name.endswith("/NPER")
         )
         nstp_candidates = sorted(
-            variable_name for variable_name in self.bmi_variable_names if variable_name.endswith("/NSTP")
+            variable_name
+            for variable_name in self.bmi_variable_names
+            if variable_name.endswith("/NSTP")
         )
 
         if nper_candidates:
@@ -338,7 +351,11 @@ class MF6BmiModel:
         file remains the most explicit source of truth for the coupling schedule.
         """
 
-        tdis_files = sorted(path for path in Path(self.workspace).iterdir() if path.suffix.lower() == ".tdis")
+        tdis_files = sorted(
+            path
+            for path in Path(self.workspace).iterdir()
+            if path.suffix.lower() == ".tdis"
+        )
         if not tdis_files:
             return None
 
@@ -384,7 +401,9 @@ class MF6BmiModel:
                 variable_name
                 for variable_name in self.bmi_variable_names
                 if variable_name.upper().endswith("/RECHARGE")
-                and ("/RCH" in variable_name.upper() or "/RCHA" in variable_name.upper())
+                and (
+                    "/RCH" in variable_name.upper() or "/RCHA" in variable_name.upper()
+                )
             ]
 
         if not candidates:
@@ -395,7 +414,9 @@ class MF6BmiModel:
         prefix = self._resolve_initialized_prefix()
         model_identifier = prefix.split("/")[-1].upper()
         scoped_candidates = [
-            variable_name for variable_name in candidates if model_identifier in variable_name.upper()
+            variable_name
+            for variable_name in candidates
+            if model_identifier in variable_name.upper()
         ]
         if scoped_candidates:
             candidates = scoped_candidates

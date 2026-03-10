@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -49,30 +49,41 @@ import numpy as np
 from mpi4py import MPI
 
 try:
-    from .application_config import ApplicationConfig, ConfigurationError, load_application_config
+    from .application_config import (
+        ApplicationConfig,
+        ConfigurationError,
+        load_application_config,
+    )
     from .mf6_bmi_parallel_model import ParallelMF6BmiModel
     from .mf6_namefile_utils import count_gwf_models
     from .vic_image_driver_runtime import VicImageDriverRuntime
-    from .vic_mpi_spawn_runtime import VicMpiSpawnRequest, run_vic_image_driver_with_mpi_spawn
+    from .vic_mpi_spawn_runtime import (
+        VicMpiSpawnRequest,
+        run_vic_image_driver_with_mpi_spawn,
+    )
     from .vic_to_mf6_recharge_mapper import VicToMf6RechargeMapper
 except ImportError:
-    from application_config import ApplicationConfig, ConfigurationError, load_application_config
+    from application_config import (
+        ApplicationConfig,
+        ConfigurationError,
+        load_application_config,
+    )
     from mf6_bmi_parallel_model import ParallelMF6BmiModel
     from mf6_namefile_utils import count_gwf_models
     from vic_image_driver_runtime import VicImageDriverRuntime
-    from vic_mpi_spawn_runtime import VicMpiSpawnRequest, run_vic_image_driver_with_mpi_spawn
+    from vic_mpi_spawn_runtime import (
+        VicMpiSpawnRequest,
+        run_vic_image_driver_with_mpi_spawn,
+    )
     from vic_to_mf6_recharge_mapper import VicToMf6RechargeMapper
 
 
 class LoggerLike(Protocol):
-    def info(self, message: str) -> None:
-        ...
+    def info(self, message: str) -> None: ...
 
-    def warning(self, message: str) -> None:
-        ...
+    def warning(self, message: str) -> None: ...
 
-    def error(self, message: str) -> None:
-        ...
+    def error(self, message: str) -> None: ...
 
 
 class CouplingControllerError(RuntimeError):
@@ -98,7 +109,6 @@ class CouplingWindow:
     duration_days: int
 
 
-
 def main(argv: Optional[list[str]] = None) -> int:
     options = _parse_command_line_options(argv)
     world = MPI.COMM_WORLD
@@ -113,11 +123,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     try:
-        return _run_coupling(world=world, rank=rank, logger=logger, config=application_config, options=options)
+        return _run_coupling(
+            world=world,
+            rank=rank,
+            logger=logger,
+            config=application_config,
+            options=options,
+        )
     except Exception as exc:
         _abort_world(world, logger, f"coupling failed: {exc}")
         return 1
-
 
 
 def _run_coupling(
@@ -130,13 +145,19 @@ def _run_coupling(
 ) -> int:
     simulation_namefile = Path(config.mf6.workspace) / "mfsim.nam"
     if rank == 0 and not simulation_namefile.exists():
-        _abort_world(world, logger, f"missing mf6 simulation name file: {simulation_namefile}")
+        _abort_world(
+            world, logger, f"missing mf6 simulation name file: {simulation_namefile}"
+        )
         return 2
 
-    groundwater_model_count = count_gwf_models(simulation_namefile) if simulation_namefile.exists() else 0
+    groundwater_model_count = (
+        count_gwf_models(simulation_namefile) if simulation_namefile.exists() else 0
+    )
     groundwater_model_count = int(world.bcast(groundwater_model_count, root=0))
     if groundwater_model_count <= 0:
-        _abort_world(world, logger, "failed to detect groundwater flow models in mfsim.nam")
+        _abort_world(
+            world, logger, "failed to detect groundwater flow models in mfsim.nam"
+        )
         return 2
 
     expected_world_size = groundwater_model_count + 1
@@ -186,7 +207,9 @@ def _run_coupling(
     selected_vic_mpi_process_count = options.vic_mpi_process_count
     if selected_vic_mpi_process_count <= 0:
         selected_vic_mpi_process_count = groundwater_model_count
-    selected_vic_mpi_process_count = int(world.bcast(selected_vic_mpi_process_count, root=0))
+    selected_vic_mpi_process_count = int(
+        world.bcast(selected_vic_mpi_process_count, root=0)
+    )
 
     previous_vic_state_tag: str | None = None
     current_window_index = 0
@@ -210,7 +233,9 @@ def _run_coupling(
                 coupling_end_limit=current_window_end_limit,
                 period_lengths_days=period_lengths_days,
             )
-            coupling_window = world.bcast(coupling_window if rank == 0 else None, root=0)
+            coupling_window = world.bcast(
+                coupling_window if rank == 0 else None, root=0
+            )
 
             if rank == 0:
                 assert vic_runtime is not None
@@ -222,20 +247,26 @@ def _run_coupling(
                     f"days={coupling_window.duration_days}"
                 )
 
-                vic_field_mm_per_day, next_vic_state_tag = _run_vic_and_collect_flux_field(
-                    vic_runtime=vic_runtime,
-                    logger=logger,
-                    config=config,
-                    coupling_window=coupling_window,
-                    previous_vic_state_tag=previous_vic_state_tag,
-                    preload_library_path=preload_library_path,
-                    vic_mpi_process_count=selected_vic_mpi_process_count,
+                vic_field_mm_per_day, next_vic_state_tag = (
+                    _run_vic_and_collect_flux_field(
+                        vic_runtime=vic_runtime,
+                        logger=logger,
+                        config=config,
+                        coupling_window=coupling_window,
+                        previous_vic_state_tag=previous_vic_state_tag,
+                        preload_library_path=preload_library_path,
+                        vic_mpi_process_count=selected_vic_mpi_process_count,
+                    )
                 )
 
                 previous_vic_state_tag = next_vic_state_tag
 
-                vic_array_shape[:] = np.asarray(vic_field_mm_per_day.shape, dtype=np.int32)
-                vic_array_flat = np.ascontiguousarray(vic_field_mm_per_day.reshape(-1), dtype=np.float64)
+                vic_array_shape[:] = np.asarray(
+                    vic_field_mm_per_day.shape, dtype=np.int32
+                )
+                vic_array_flat = np.ascontiguousarray(
+                    vic_field_mm_per_day.reshape(-1), dtype=np.float64
+                )
                 stop_flag[0] = 0
 
             world.Bcast(stop_flag, root=0)
@@ -245,7 +276,11 @@ def _run_coupling(
             world.Bcast(vic_array_shape, root=0)
             element_count = int(vic_array_shape[0]) * int(vic_array_shape[1])
             if element_count <= 0:
-                _abort_world(world, logger, f"invalid vic field shape broadcast: {tuple(vic_array_shape)}")
+                _abort_world(
+                    world,
+                    logger,
+                    f"invalid vic field shape broadcast: {tuple(vic_array_shape)}",
+                )
                 return 1
 
             if rank != 0:
@@ -257,7 +292,9 @@ def _run_coupling(
             if rank > 0:
                 assert mf6_model is not None
                 assert recharge_mapper is not None
-                vic_field_mm_per_day = vic_array_flat.reshape(int(vic_array_shape[0]), int(vic_array_shape[1]))
+                vic_field_mm_per_day = vic_array_flat.reshape(
+                    int(vic_array_shape[0]), int(vic_array_shape[1])
+                )
 
                 if recharge_mapper.vic_grid_shape is not None:
                     broadcast_shape = (int(vic_array_shape[0]), int(vic_array_shape[1]))
@@ -269,13 +306,17 @@ def _run_coupling(
                         )
                         return 1
 
-                recharge_array = recharge_mapper.compute_recharge_array(vic_field_mm_per_day)
+                recharge_array = recharge_mapper.compute_recharge_array(
+                    vic_field_mm_per_day
+                )
                 recharge_array *= float(config.coupling.recharge_scale)
                 mf6_model.set_recharge(recharge_array)
                 mf6_model.step_to_date(coupling_window.end_datetime)
 
             world.Barrier()
-            current_window_index = int(world.bcast(current_window_index + 1 if rank == 0 else None, root=0))
+            current_window_index = int(
+                world.bcast(current_window_index + 1 if rank == 0 else None, root=0)
+            )
             current_window_start = world.bcast(
                 coupling_window.end_datetime + timedelta(days=1) if rank == 0 else None,
                 root=0,
@@ -296,13 +337,14 @@ def _run_coupling(
     return 0
 
 
-
 def _parse_command_line_options(argv: Optional[list[str]]) -> CommandLineOptions:
     parser = argparse.ArgumentParser(
         prog="vicmf6-mpi",
         description="mpi vic-mf6 coupling using one controller rank and one mf6 worker rank per gwf model",
     )
-    parser.add_argument("-c", "--config", required=True, help="path to the coupling yaml file")
+    parser.add_argument(
+        "-c", "--config", required=True, help="path to the coupling yaml file"
+    )
     parser.add_argument(
         "--vic-nprocs",
         type=int,
@@ -324,7 +366,6 @@ def _parse_command_line_options(argv: Optional[list[str]]) -> CommandLineOptions
     )
 
 
-
 def build_console_logger(rank: int) -> logging.Logger:
     logger = logging.getLogger(f"vic_mf6_mpi_rank_{rank}")
     if logger.handlers:
@@ -338,11 +379,9 @@ def build_console_logger(rank: int) -> logging.Logger:
     return logger
 
 
-
 def _build_mf6_subcommunicator(*, world: MPI.Comm, rank: int) -> MPI.Comm | None:
     color = 1 if rank > 0 else MPI.UNDEFINED
     return world.Split(color=color, key=rank)
-
 
 
 def _initialize_mf6_worker(
@@ -364,7 +403,9 @@ def _initialize_mf6_worker(
             length_units=config.mf6.length_units,
         )
         assert mf6_subcommunicator is not None
-        mf6_model.initialize_parallel(int(mf6_subcommunicator.py2f()), simulation_namefile)
+        mf6_model.initialize_parallel(
+            int(mf6_subcommunicator.py2f()), simulation_namefile
+        )
 
         recharge_mapper = VicToMf6RechargeMapper(
             coupling_table_csv=config.coupling.coupling_table_csv,
@@ -386,8 +427,9 @@ def _initialize_mf6_worker(
         raise
 
 
-
-def _initialize_vic_controller(*, logger: LoggerLike, config: ApplicationConfig) -> VicImageDriverRuntime:
+def _initialize_vic_controller(
+    *, logger: LoggerLike, config: ApplicationConfig
+) -> VicImageDriverRuntime:
     _configure_local_thread_environment(thread_count="1")
 
     return VicImageDriverRuntime(
@@ -403,7 +445,6 @@ def _initialize_vic_controller(*, logger: LoggerLike, config: ApplicationConfig)
     )
 
 
-
 def _build_coupling_window(
     *,
     window_index: int,
@@ -412,7 +453,9 @@ def _build_coupling_window(
     period_lengths_days: list[float] | None,
 ) -> CouplingWindow:
     duration_days = _choose_coupling_window_length(period_lengths_days, window_index)
-    window_end = min(window_start + timedelta(days=duration_days - 1), coupling_end_limit)
+    window_end = min(
+        window_start + timedelta(days=duration_days - 1), coupling_end_limit
+    )
 
     return CouplingWindow(
         index=window_index,
@@ -422,8 +465,9 @@ def _build_coupling_window(
     )
 
 
-
-def _choose_coupling_window_length(period_lengths_days: list[float] | None, window_index: int) -> int:
+def _choose_coupling_window_length(
+    period_lengths_days: list[float] | None, window_index: int
+) -> int:
     if not period_lengths_days:
         return 1
     if window_index < 0 or window_index >= len(period_lengths_days):
@@ -431,7 +475,6 @@ def _choose_coupling_window_length(period_lengths_days: list[float] | None, wind
 
     duration_days = int(round(float(period_lengths_days[window_index])))
     return 1 if duration_days <= 0 else duration_days
-
 
 
 def _run_vic_and_collect_flux_field(
@@ -485,7 +528,6 @@ def _run_vic_and_collect_flux_field(
     return _mean_water_balance_to_2d_flux(vic_water_balance_array), next_state_tag
 
 
-
 def _resolve_vic_spawn_preload_library() -> str | None:
     configured_value = os.environ.get("vic_spawn_preload")
     if configured_value:
@@ -502,7 +544,6 @@ def _resolve_vic_spawn_preload_library() -> str | None:
     return None
 
 
-
 def _configure_local_thread_environment(*, thread_count: str) -> None:
     # the controller should stay single-threaded unless there is a deliberate
     # reason not to. otherwise numpy and linked math libraries can compete with
@@ -513,14 +554,12 @@ def _configure_local_thread_environment(*, thread_count: str) -> None:
     os.environ["NUMEXPR_NUM_THREADS"] = thread_count
 
 
-
 def _abort_world(world: MPI.Comm, logger: LoggerLike, message: str) -> None:
     try:
         logger.error(message)
     except Exception:
         pass
     world.Abort(1)
-
 
 
 def _detect_latest_vic_state_tag(
@@ -552,7 +591,11 @@ def _detect_latest_vic_state_tag(
         return None
 
     if since_epoch is not None:
-        candidate_files = [path for path in candidate_files if os.path.getmtime(path) >= float(since_epoch)]
+        candidate_files = [
+            path
+            for path in candidate_files
+            if os.path.getmtime(path) >= float(since_epoch)
+        ]
         if not candidate_files:
             logger.error(
                 "no fresh vic state files were written in the outputs directory "
@@ -571,7 +614,6 @@ def _detect_latest_vic_state_tag(
     return state_tag
 
 
-
 def _read_vic_water_balance_for_window(
     *,
     vic_runtime: VicImageDriverRuntime,
@@ -581,7 +623,9 @@ def _read_vic_water_balance_for_window(
     since_epoch: float | None = None,
 ) -> np.ndarray:
     if duration_days <= 1:
-        array = vic_runtime.read_water_balance_near(window_start, since_epoch=since_epoch)
+        array = vic_runtime.read_water_balance_near(
+            window_start, since_epoch=since_epoch
+        )
     else:
         array = vic_runtime.read_water_balance_for_period(
             window_start,
@@ -597,7 +641,6 @@ def _read_vic_water_balance_for_window(
     return np.asarray(array, dtype=float)
 
 
-
 def _mean_water_balance_to_2d_flux(water_balance_array: np.ndarray) -> np.ndarray:
     """reduce a vic output array to a 2d mean flux field in millimeters per day."""
 
@@ -606,7 +649,9 @@ def _mean_water_balance_to_2d_flux(water_balance_array: np.ndarray) -> np.ndarra
         return np.nanmean(array, axis=0)
     if array.ndim == 2:
         return array
-    raise CouplingControllerError(f"unexpected vic water-balance array shape: {array.shape}")
+    raise CouplingControllerError(
+        f"unexpected vic water-balance array shape: {array.shape}"
+    )
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
 #
 # Contact
 # Abdullah Azzam <abdazzam@nmsu.edu>
-# Department of Civil and Environmental Engineering, 
+# Department of Civil and Environmental Engineering,
 # New Mexico State University
 ###############################################################################
 
@@ -51,14 +51,11 @@ from netCDF4 import Dataset
 
 
 class LoggerLike(Protocol):
-    def info(self, message: str) -> None:
-        ...
+    def info(self, message: str) -> None: ...
 
-    def warning(self, message: str) -> None:
-        ...
+    def warning(self, message: str) -> None: ...
 
-    def error(self, message: str) -> None:
-        ...
+    def error(self, message: str) -> None: ...
 
 
 class VicRuntimeError(RuntimeError):
@@ -83,7 +80,9 @@ class VicImageDriverRuntime:
     water_balance_file_prefix: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        self.working_directory = str(Path(self.working_directory).expanduser().resolve())
+        self.working_directory = str(
+            Path(self.working_directory).expanduser().resolve()
+        )
         self.executable_path = str(Path(self.executable_path).expanduser().resolve())
         self.global_parameter_template = self._resolve_relative_to_working_directory(
             self.global_parameter_template
@@ -120,12 +119,18 @@ class VicImageDriverRuntime:
 
         template_path = Path(self.global_parameter_template)
         if not template_path.exists():
-            raise FileNotFoundError(f"global parameter template was not found: {template_path}")
+            raise FileNotFoundError(
+                f"global parameter template was not found: {template_path}"
+            )
 
-        step_parameter_path = Path(self.working_directory) / f"global_param_{step_tag}.txt"
+        step_parameter_path = (
+            Path(self.working_directory) / f"global_param_{step_tag}.txt"
+        )
         shutil.copyfile(template_path, step_parameter_path)
 
-        template_lines = step_parameter_path.read_text(encoding="utf-8").splitlines(keepends=True)
+        template_lines = step_parameter_path.read_text(encoding="utf-8").splitlines(
+            keepends=True
+        )
         discovered_prefixes = self._discover_output_prefixes(template_lines)
         self.state_file_prefix = discovered_prefixes["state_prefix"]
         self.water_balance_file_prefix = discovered_prefixes["water_balance_prefix"]
@@ -223,10 +228,14 @@ class VicImageDriverRuntime:
             candidate_files.extend(glob.glob(pattern))
 
         if not candidate_files:
-            self.logger.error(f"no vic state files were found for prefix: {state_prefix_path}")
+            self.logger.error(
+                f"no vic state files were found for prefix: {state_prefix_path}"
+            )
             return None
 
-        fresh_files = self._filter_files_by_mtime(candidate_files, since_epoch=since_epoch)
+        fresh_files = self._filter_files_by_mtime(
+            candidate_files, since_epoch=since_epoch
+        )
         if since_epoch is not None and not fresh_files:
             self.logger.error(
                 "no fresh vic state files were written for the current run "
@@ -243,7 +252,9 @@ class VicImageDriverRuntime:
             return None
 
         state_tag = match.group(1)
-        self.logger.info(f"latest vic state tag detected: {state_tag} from {latest_file}")
+        self.logger.info(
+            f"latest vic state tag detected: {state_tag} from {latest_file}"
+        )
         return state_tag
 
     def read_water_balance_near(
@@ -264,7 +275,9 @@ class VicImageDriverRuntime:
             candidate_path = self._water_balance_path_for_datetime(candidate_datetime)
             if not candidate_path.exists():
                 continue
-            if since_epoch is not None and os.path.getmtime(candidate_path) < float(since_epoch):
+            if since_epoch is not None and os.path.getmtime(candidate_path) < float(
+                since_epoch
+            ):
                 continue
 
             self.logger.info(
@@ -296,9 +309,14 @@ class VicImageDriverRuntime:
             )
             return None
 
-        water_balance_path = Path(self.outputs_directory) / f"{self.water_balance_file_prefix}.{date_tag}.nc"
+        water_balance_path = (
+            Path(self.outputs_directory)
+            / f"{self.water_balance_file_prefix}.{date_tag}.nc"
+        )
         if not water_balance_path.exists():
-            self.logger.error(f"vic water-balance file was not found: {water_balance_path}")
+            self.logger.error(
+                f"vic water-balance file was not found: {water_balance_path}"
+            )
             return None
 
         self.logger.info(f"reading vic water-balance file: {water_balance_path}")
@@ -337,10 +355,14 @@ class VicImageDriverRuntime:
                 )
                 return None
 
-            self._log_array_statistics(normalized_for_logging, variable_name=self.water_balance_variable)
+            self._log_array_statistics(
+                normalized_for_logging, variable_name=self.water_balance_variable
+            )
             return array
         except Exception as exc:
-            self.logger.error(f"failed to read vic water-balance file {water_balance_path}: {exc}")
+            self.logger.error(
+                f"failed to read vic water-balance file {water_balance_path}: {exc}"
+            )
             return None
         finally:
             if dataset is not None:
@@ -359,7 +381,9 @@ class VicImageDriverRuntime:
         current_datetime = step_start
 
         while current_datetime <= step_end:
-            daily_array = self.read_water_balance_near(current_datetime, since_epoch=since_epoch)
+            daily_array = self.read_water_balance_near(
+                current_datetime, since_epoch=since_epoch
+            )
             if daily_array is None:
                 return None
 
@@ -401,11 +425,15 @@ class VicImageDriverRuntime:
                 "water_balance_file_prefix is not set. create_step_specific_global_parameter_file() must run first."
             )
 
-        candidate_pattern = str(Path(self.outputs_directory) / f"{self.water_balance_file_prefix}.*.nc")
+        candidate_pattern = str(
+            Path(self.outputs_directory) / f"{self.water_balance_file_prefix}.*.nc"
+        )
         candidate_files = glob.glob(candidate_pattern)
         if since_epoch is not None:
             candidate_files = [
-                path for path in candidate_files if os.path.getmtime(path) >= float(since_epoch)
+                path
+                for path in candidate_files
+                if os.path.getmtime(path) >= float(since_epoch)
             ]
 
         tagged_files: list[tuple[datetime, str]] = []
@@ -423,7 +451,9 @@ class VicImageDriverRuntime:
             for _, date_tag in tagged_files:
                 array = self.read_water_balance(date_tag)
                 if array is None:
-                    raise VicRuntimeError(f"failed to read vic water-balance file for tag {date_tag}")
+                    raise VicRuntimeError(
+                        f"failed to read vic water-balance file for tag {date_tag}"
+                    )
                 normalized_array = np.asarray(array, dtype=float)
                 if normalized_array.ndim == 3 and normalized_array.shape[0] == 1:
                     normalized_array = normalized_array[0]
@@ -445,14 +475,18 @@ class VicImageDriverRuntime:
                 )
             return np.asarray(array, dtype=float)
 
-        raise VicRuntimeError("no vic water-balance outputs are available for this step")
+        raise VicRuntimeError(
+            "no vic water-balance outputs are available for this step"
+        )
 
     def read_latitude_longitude_vectors(self) -> tuple[np.ndarray, np.ndarray]:
         """read 1d latitude and longitude vectors from the vic parameter netcdf file."""
 
         parameters_path = Path(self.parameters_netcdf_path)
         if not parameters_path.exists():
-            raise FileNotFoundError(f"vic parameters netcdf file was not found: {parameters_path}")
+            raise FileNotFoundError(
+                f"vic parameters netcdf file was not found: {parameters_path}"
+            )
 
         dataset: Dataset | None = None
         try:
@@ -496,7 +530,9 @@ class VicImageDriverRuntime:
         return str((Path(self.working_directory) / candidate).resolve())
 
     @staticmethod
-    def _filter_files_by_mtime(candidate_files: list[str], *, since_epoch: float | None) -> list[str]:
+    def _filter_files_by_mtime(
+        candidate_files: list[str], *, since_epoch: float | None
+    ) -> list[str]:
         if since_epoch is None:
             return list(candidate_files)
         threshold = float(since_epoch)
@@ -526,7 +562,9 @@ class VicImageDriverRuntime:
                 water_balance_prefix = Path(parts[1]).name
 
         if not state_prefix:
-            raise VicRuntimeError("STATENAME was not found in the vic global parameter template")
+            raise VicRuntimeError(
+                "STATENAME was not found in the vic global parameter template"
+            )
         if not water_balance_prefix:
             water_balance_prefix = "wbal"
 
@@ -581,15 +619,23 @@ class VicImageDriverRuntime:
             if normalized_key == "STATENAME":
                 rewritten_lines.append(raw_line)
                 if "STATEYEAR" not in discovered_keys:
-                    rewritten_lines.append(f"STATEYEAR   {save_state_datetime.year:04d}\n")
+                    rewritten_lines.append(
+                        f"STATEYEAR   {save_state_datetime.year:04d}\n"
+                    )
                 if "STATEMONTH" not in discovered_keys:
-                    rewritten_lines.append(f"STATEMONTH  {save_state_datetime.month:02d}\n")
+                    rewritten_lines.append(
+                        f"STATEMONTH  {save_state_datetime.month:02d}\n"
+                    )
                 if "STATEDAY" not in discovered_keys:
-                    rewritten_lines.append(f"STATEDAY    {save_state_datetime.day:02d}\n")
+                    rewritten_lines.append(
+                        f"STATEDAY    {save_state_datetime.day:02d}\n"
+                    )
                 continue
 
             if normalized_key == "INITSTATE":
-                rewritten_lines.append(raw_line if raw_line.startswith("#") else f"#{raw_line}")
+                rewritten_lines.append(
+                    raw_line if raw_line.startswith("#") else f"#{raw_line}"
+                )
                 if not is_first_step and previous_state_tag and not inserted_init_state:
                     rewritten_lines.append(
                         f"INIT_STATE  {self.state_file_prefix}.{previous_state_tag}_00000.nc\n"
@@ -611,7 +657,9 @@ class VicImageDriverRuntime:
 
         if not is_first_step and previous_state_tag and not inserted_init_state:
             if "INITSTATE" not in discovered_keys:
-                rewritten_lines.append("\n# injected by the coupling controller to preserve restart continuity.\n")
+                rewritten_lines.append(
+                    "\n# injected by the coupling controller to preserve restart continuity.\n"
+                )
             rewritten_lines.append(
                 f"INIT_STATE  {self.state_file_prefix}.{previous_state_tag}_00000.nc\n"
             )
@@ -659,7 +707,9 @@ class VicImageDriverRuntime:
             return str(prefix_candidate)
         return str((Path(self.working_directory) / prefix_candidate).resolve())
 
-    def _water_balance_path_for_datetime(self, water_balance_datetime: datetime) -> Path:
+    def _water_balance_path_for_datetime(
+        self, water_balance_datetime: datetime
+    ) -> Path:
         if not self.water_balance_file_prefix:
             raise VicRuntimeError(
                 "water_balance_file_prefix is not set. create_step_specific_global_parameter_file() must run first."
@@ -679,7 +729,9 @@ class VicImageDriverRuntime:
                 continue
         return fill_values
 
-    def _log_array_statistics(self, array_2d: np.ndarray, *, variable_name: str) -> None:
+    def _log_array_statistics(
+        self, array_2d: np.ndarray, *, variable_name: str
+    ) -> None:
         try:
             mean_value = float(np.nanmean(array_2d))
             min_value = float(np.nanmin(array_2d))
