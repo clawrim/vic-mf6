@@ -377,6 +377,11 @@ mpirun -np 5 python3 run_vic_mf6_mpi_coupling.py \
 
 If `--vic-nprocs` is not provided or is set to `0`, the launcher uses the number of MF6 groundwater models as the VIC spawn size.
 
+In case of limited number of cores; use the mpi oversubscribe flag so that the simulation doesn't terminate;
+```sh
+mpirun --bind-to none -np 5 --oversubscribe python -m mpi4py run_vic_mf6_mpi_coupling.py -c config.yaml
+```
+
 ## Typical setup sequence
 
 A typical run preparation looks like this:
