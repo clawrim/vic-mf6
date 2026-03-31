@@ -340,8 +340,36 @@ By default, the coupling window length is inferred from MF6 TDIS `PERLEN` values
 
 ## Running the code
 
-Launch from the directory that contains the Python modules, unless you have installed the code as a package or set `PYTHONPATH` accordingly.
+Launch from the directory that contains the Python modules, unless you have
+installed the code as a package or set `PYTHONPATH` accordingly.
 
+### Set environment variables
+
+To be safe, set two environment variables;
+
+```sh
+export OMP_NUM_THREADS=1
+export PMIX_MCA_gds=hash
+```
+`OMP_NUM_THREADS=1` is required so that by default, all the cores used for VIC
+are being utilized by the MPI `PMIX_MCA_gda=hash` is used because PMIx/OpenMPI
+to use the hash datastore backend instead of the default shared-memory
+datastore backend. This is necessary because the coupling workflow repeatedly
+launches VIC using MPI_Comm_spawn() at every coupling step. With the default
+PMIx datastore backend, repeated spawns can eventually trigger PMIx resource
+errors such as:
+
+- PMIX ERROR: OUT-OF-RESOURCE
+- failures in dstore_segment.c,
+- child MPI initialization failures, or
+- MPI_ERR_SPAWN.
+
+Setting PMIX_MCA_gds=hash avoids that failing PMIx datastore path and makes
+repeated VIC spawns stable for long runs. If this variable is not set, the
+coupled workflow may work for a while and then fail after many coupling
+windows, even when CPU and memory usage appear normal.
+
+### Run the model
 Basic command:
 
 ```sh
@@ -357,8 +385,8 @@ mpirun -np 5 python3 run_vic_mf6_mpi_coupling.py -c config.yaml
 Optional arguments:
 
 ```text
---vic-nprocs <n>   number of ranks used when spawning VIC
---max-steps <n>    stop after n coupling windows
+--vic-nprocs <n>  number of ranks used when spawning VIC
+--max-steps <n>   stop after n coupling windows
 ```
 
 Examples:
