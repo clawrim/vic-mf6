@@ -110,6 +110,9 @@ class ParallelMF6BmiModel:
         self.logger.info(
             f"parallel mf6 bmi initialized prefix={self.model_prefix} nrow={self.nrow} ncol={self.ncol}"
         )
+        self.logger.info(
+                f"parallel mf6 recharge variable resolved: {self.recharge_variable_name}"
+        )
 
     def finalize(self) -> None:
         if self.bmi is None:
@@ -144,6 +147,34 @@ class ParallelMF6BmiModel:
 
         pointer_array[:] = recharge_vector
 
+        self.logger.info(
+            "set_recharge pointer after "
+            f"var={recharge_variable_name} "
+            f"size={pointer_array.size} "
+            f"min={np.nanmin(pointer_array):.6e} "
+            f"max={np.nanmax(pointer_array):.6e} "
+            f"mean={np.nanmean(pointer_array):.6e} "
+            f"sum={np.nansum(pointer_array):.6e}"
+        )
+
+    def step_one_day_with_recharge(self, recharge_array_2d: np.ndarray) -> None:
+        bmi = self._require_bmi()
+
+        try:
+            time_step_days = float(bmi.get_time_step())
+        except Exception:
+            time_step_days = 1.0
+
+        if time_step_days <= 0.0:
+            time_step_days = 1.0
+        
+        # following order of API calls is important; especially, set the
+        # recharge pointer after prepare time step and before do time step
+        bmi.prepare_time_step(time_step_days)
+        self.set_recharge(recharge_array_2d)
+        bmi.do_time_step()
+        bmi.finalize_time_step()
+
     def step_to_date(self, target_date: datetime) -> None:
         """advance the rank-local mf6 runtime until the target date is reached."""
 
@@ -151,7 +182,7 @@ class ParallelMF6BmiModel:
         if target_date < self.start_date:
             return
 
-        target_days = float((target_date - self.start_date).days)
+        target_days = float((target_date - self.start_date).days + 1)
         try:
             model_end_time = float(bmi.get_end_time())
             if target_days > model_end_time:
@@ -160,7 +191,16 @@ class ParallelMF6BmiModel:
             pass
 
         current_time = float(bmi.get_current_time())
+        self.logger.info(
+            f"step_to_date start current_time={current_time:.6f} "
+            f"target_days={target_days:.6f} target_date={target_date.date()}"
+        )
+
         if target_days <= current_time:
+            self.logger.info(
+                f"step_to_date skip current_time={current_time:.6f} "
+                f"target_days={target_days:.6f}"
+            )
             return
 
         while current_time < target_days:
@@ -172,10 +212,21 @@ class ParallelMF6BmiModel:
             if time_step_days <= 0.0:
                 time_step_days = max(1.0, target_days - current_time)
 
+            self.logger.info(
+                f"mf6 before step current_time={current_time:.6f} "
+                f"dt={time_step_days:.6f} target={target_days:.6f}"
+            )
+
             bmi.prepare_time_step(time_step_days)
             bmi.do_time_step()
             bmi.finalize_time_step()
+
             current_time = float(bmi.get_current_time())
+
+            self.logger.info(
+                f"mf6 after step current_time={current_time:.6f} "
+                f"target={target_days:.6f}"
+            )
 
     def _safe_initialize_mpi_runtime(
         self, *, mpi_comm_handle: int, simulation_namefile: str
