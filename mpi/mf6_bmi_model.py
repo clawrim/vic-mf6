@@ -155,7 +155,7 @@ class MF6BmiModel:
         if target_date < self.start_date:
             return
 
-        target_days = float((target_date - self.start_date).days)
+        target_days = float((target_date - self.start_date).days + 1)
         try:
             model_end_time = float(bmi.get_end_time())
             if target_days > model_end_time:
@@ -182,6 +182,31 @@ class MF6BmiModel:
             bmi.finalize_time_step()
             self.logger.info("finished mf6 bmi time step")
             current_time = float(bmi.get_current_time())
+
+    def step_one_day_with_recharge(
+        self,
+        recharge_array: np.ndarray,
+        *,
+        inactive_to_zero: bool = True,
+    ) -> None:
+        """prepare one mf6 step, write recharge, solve, and finalize."""
+
+        bmi = self._require_bmi()
+
+        try:
+            time_step_days = float(bmi.get_time_step())
+        except Exception:
+            time_step_days = 1.0
+
+        if time_step_days <= 0.0:
+            time_step_days = 1.0
+
+        bmi.prepare_time_step(time_step_days)
+        self.set_recharge(recharge_array, inactive_to_zero=inactive_to_zero)
+        self.logger.info("starting mf6 bmi time step")
+        bmi.do_time_step()
+        bmi.finalize_time_step()
+        self.logger.info("finished mf6 bmi time step")
 
     def set_recharge(
         self, recharge_array: np.ndarray, *, inactive_to_zero: bool = True
@@ -231,12 +256,28 @@ class MF6BmiModel:
 
         pointer = bmi.get_value_ptr(recharge_variable_name)
         pointer_array = np.asarray(pointer)
+        self.logger.info(
+                f"set_recharge var={recharge_variable_name} "
+                f"size={pointer_array.size} "
+                f"in_min={np.nanmin(recharge_vector):.6e} "
+                f"in_max={np.nanmax(recharge_vector):.6e} "
+                f"in_mean={np.nanmean(recharge_vector):.6e} "
+                f"in_sum={np.nansum(recharge_vector):.6e}"
+                )
+
         if pointer_array.size != recharge_vector.size:
             raise MF6BmiError(
                 f"recharge bmi pointer size mismatch bmi={pointer_array.size} provided={recharge_vector.size}"
             )
 
         pointer_array[:] = recharge_vector
+        self.logger.info(
+                f"set_recharge readback "
+                f"out_min={np.nanmin(pointer_array):.6e} "
+                f"out_max={np.nanmax(pointer_array):.6e} "
+                f"out_mean={np.nanmean(pointer_array):.6e} "
+                f"out_sum={np.nansum(pointer_array):.6e}"
+                )
 
     def cell_areas(self) -> np.ndarray | None:
         """return a structured-grid cell area matrix when delr and delc are available."""
