@@ -317,8 +317,6 @@ def _run_coupling(
                         f"mean={np.nanmean(recharge_array):.6e} "
                         f"sum={np.nansum(recharge_array):.6e}"
                 )
-#                mf6_model.set_recharge(recharge_array)
-#                mf6_model.step_to_date(coupling_window.end_datetime)
                 mf6_model.step_one_day_with_recharge(recharge_array)
 
             world.Barrier()
