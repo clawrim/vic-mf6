@@ -310,8 +310,14 @@ def _run_coupling(
                     vic_field_mm_per_day
                 )
                 recharge_array *= float(config.coupling.recharge_scale)
-                mf6_model.set_recharge(recharge_array)
-                mf6_model.step_to_date(coupling_window.end_datetime)
+                logger.info(
+                        "recharge stats "
+                        f"min={np.nanmin(recharge_array):.6e} "
+                        f"max={np.nanmax(recharge_array):.6e} "
+                        f"mean={np.nanmean(recharge_array):.6e} "
+                        f"sum={np.nansum(recharge_array):.6e}"
+                )
+                mf6_model.step_one_day_with_recharge(recharge_array)
 
             world.Barrier()
             current_window_index = int(
