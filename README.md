@@ -7,3 +7,7 @@ This figure shows the flowchart of the VIC-MF6 coupling framework:
 
 This figure shows how to optimize the coupled distributed model:
 <img alt="Distributed optimization of the VIC-MF6 coupling framework" src="https://github.com/clawrim/VIC-MF6/blob/main/figures/vic-mf6-optimization.gif" />
+
+## Acknowledgments
+
+This project is funded by the U.S. Geological Survey (USGS) Water Resources Research Act 104(b) grant [NM_2023_Cho](https://water.usgs.gov/wrri/grant-details.php?ProjectID=2023NM163B&Type=Annual) through the New Mexico Water Resources Research Institute (NM WRRI) under award GR0007017, as part of USGS Grant/Cooperative Agreement No. G21AP10635, along with an additional internal award from the NM WRRI.
